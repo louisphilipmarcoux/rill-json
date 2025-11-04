@@ -34,7 +34,6 @@ fn parse_number(input: &str) -> Result<(JsonValue, &str), &'static str> {
     }
 }
 
-
 fn parse_value(input: &str) -> Result<(JsonValue, &str), &'static str> {
     match input.chars().next() {
         Some('n') => parse_null(input),
@@ -94,9 +93,15 @@ mod tests {
     fn test_parse_numbers() {
         assert_eq!(parse_value("0").unwrap(), (JsonValue::Number(0.0), ""));
         assert_eq!(parse_value("123").unwrap(), (JsonValue::Number(123.0), ""));
-        assert_eq!(parse_value("-123").unwrap(), (JsonValue::Number(-123.0), ""));
+        assert_eq!(
+            parse_value("-123").unwrap(),
+            (JsonValue::Number(-123.0), "")
+        );
 
-        assert_eq!(parse_value("45.67").unwrap(), (JsonValue::Number(45.67), ""));
+        assert_eq!(
+            parse_value("45.67").unwrap(),
+            (JsonValue::Number(45.67), "")
+        );
         assert_eq!(parse_value("-0.5").unwrap(), (JsonValue::Number(-0.5), ""));
 
         let (value, rest) = parse_value("123, 456").unwrap();
