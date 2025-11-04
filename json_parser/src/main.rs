@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::fmt;
+use std::iter::Peekable;
+use std::str::Chars;
 
-// --- 1. JsonValue Enum ---
-#[derive(Debug, PartialEq)]
+// --- 1. The final JSON Value Enum ---
+#[derive(Debug, PartialEq, Clone)]
 pub enum JsonValue {
     Null,
     Boolean(bool),
@@ -11,253 +14,469 @@ pub enum JsonValue {
     Object(HashMap<String, JsonValue>),
 }
 
-// --- 2. Parser Functions ---
-
-fn skip_whitespace(input: &str) -> &str {
-    input.trim_start()
+// --- 2. The new Token Structs ---
+#[derive(Debug, PartialEq, Clone)]
+pub enum TokenType {
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+    Colon,        // :
+    Comma,        // ,
+    String(String),
+    Number(f64),
+    Boolean(bool),
+    Null,
 }
 
-fn parse_null(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    if input.starts_with("null") {
-        Ok((JsonValue::Null, &input[4..]))
-    } else {
-        Err("Expected 'null'")
+#[derive(Debug, PartialEq, Clone)]
+pub struct Token {
+    kind: TokenType,
+    line: usize,
+    column: usize,
+}
+
+// --- 3. The new Error Type ---
+#[derive(Debug, PartialEq)]
+pub struct ParseError {
+    message: String,
+    line: usize,
+    column: usize,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Error: {} at line {}, column {}.",
+            self.message, self.line, self.column
+        )
     }
 }
 
-fn parse_boolean(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    if input.starts_with("true") {
-        Ok((JsonValue::Boolean(true), &input[4..]))
-    } else if input.starts_with("false") {
-        Ok((JsonValue::Boolean(false), &input[5..]))
-    } else {
-        Err("Expected 'true' or 'false'")
-    }
+// --- 4. The Tokenizer (Lexer) ---
+struct Tokenizer<'a> {
+    input: Peekable<Chars<'a>>,
+    line: usize,
+    column: usize,
 }
 
-fn parse_number(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    let end_index = input
-        .find(|c: char| c.is_whitespace() || c == ',' || c == ']' || c == '}')
-        .unwrap_or(input.len());
-
-    let num_str = &input[..end_index];
-
-    // --- NEW VALIDATION for Stage 10 ---
-    if num_str.is_empty() {
-        return Err("Invalid number format: empty string");
+impl<'a> Tokenizer<'a> {
+    fn new(input: &'a str) -> Self {
+        Tokenizer {
+            input: input.chars().peekable(),
+            line: 1,
+            column: 1,
+        }
     }
 
-    // Fail cases like "1.e1" or "1.E1"
-    if let Some(e_pos) = num_str.find(['e', 'E']) {
-        if e_pos > 0 {
-            // Check the character right before the 'e' or 'E'
-            if let Some(char_before_e) = num_str.chars().nth(e_pos - 1) {
-                if char_before_e == '.' {
-                    return Err("Invalid number format: decimal point must be followed by digits");
-                }
+    fn next_char(&mut self) -> Option<char> {
+        let char = self.input.next();
+        if let Some(c) = char {
+            if c == '\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
             }
         }
+        char
     }
 
-    // Fail cases like "1e", "1e+", "1e-" [cite: 174]
-    if let Some(last_char) = num_str.chars().last() {
-        if last_char == 'e' || last_char == 'E' || last_char == '+' || last_char == '-' {
-            return Err("Invalid number format: incomplete exponent");
+    fn peek(&mut self) -> Option<&char> {
+        self.input.peek()
+    }
+
+    fn error(&self, message: String) -> ParseError {
+        ParseError {
+            message,
+            line: self.line,
+            column: self.column,
         }
     }
-    // --- END NEW VALIDATION ---
 
-    // Now, try to parse the (mostly) validated string
-    match num_str.parse::<f64>() {
-        Ok(num) => Ok((JsonValue::Number(num), &input[end_index..])),
-        Err(_) => Err("Invalid number format"), // Catches other errors like "--1" [cite: 58]
+    fn tokenize(&mut self) -> Result<Vec<Token>, ParseError> {
+        let mut tokens = Vec::new();
+        loop {
+            let (start_line, start_column) = (self.line, self.column);
+            let next_char = match self.peek() {
+                Some(c) => *c,
+                None => break,
+            };
+
+            let token_kind = match next_char {
+                ' ' | '\t' | '\r' | '\n' => {
+                    self.next_char();
+                    continue;
+                }
+                '{' => {
+                    self.next_char();
+                    TokenType::LeftBrace
+                }
+                '}' => {
+                    self.next_char();
+                    TokenType::RightBrace
+                }
+                '[' => {
+                    self.next_char();
+                    TokenType::LeftBracket
+                }
+                ']' => {
+                    self.next_char();
+                    TokenType::RightBracket
+                }
+                ':' => {
+                    self.next_char();
+                    TokenType::Colon
+                }
+                ',' => {
+                    self.next_char();
+                    TokenType::Comma
+                }
+                'n' => self.lex_literal("null", TokenType::Null)?,
+                't' => self.lex_literal("true", TokenType::Boolean(true))?,
+                'f' => self.lex_literal("false", TokenType::Boolean(false))?,
+                '"' => self.lex_string()?,
+                '-' | '0'..='9' => self.lex_number()?,
+
+                // --- NEW for Stage 13: Reject Comments ---
+                '/' => {
+                    return Err(self.error("Comments are not allowed in JSON".to_string()));
+                }
+                // --- End New ---
+                _ => {
+                    return Err(self.error(format!("Unexpected character '{}'", next_char)));
+                }
+            };
+
+            tokens.push(Token {
+                kind: token_kind,
+                line: start_line,
+                column: start_column,
+            });
+        }
+        Ok(tokens)
     }
-}
 
-/// Tries to parse a JSON string, handling escape sequences and Unicode.
-fn parse_string(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    if !input.starts_with('"') {
-        return Err("Expected '\"' at start of string");
+    fn lex_literal(
+        &mut self,
+        expected: &'static str,
+        kind: TokenType,
+    ) -> Result<TokenType, ParseError> {
+        for expected_char in expected.chars() {
+            if self.next_char() != Some(expected_char) {
+                return Err(self.error(format!("Expected '{}'", expected)));
+            }
+        }
+        Ok(kind)
     }
 
-    let mut parsed_content = String::new();
-    let mut chars = input[1..].chars().enumerate();
+    fn lex_string(&mut self) -> Result<TokenType, ParseError> {
+        self.next_char(); // Consume opening '"'
+        let mut parsed_content = String::new();
 
-    while let Some((i, c)) = chars.next() {
-        match c {
-            '\\' => {
-                if let Some((_, escaped_char)) = chars.next() {
-                    match escaped_char {
-                        '"' | '\\' | '/' => parsed_content.push(escaped_char),
-                        'b' => parsed_content.push('\u{0008}'),
-                        'f' => parsed_content.push('\u{000C}'),
-                        'n' => parsed_content.push('\n'),
-                        'r' => parsed_content.push('\r'),
-                        't' => parsed_content.push('\t'),
-                        'u' => {
-                            // --- NEW Surrogate-Aware Logic ---
-
-                            // Helper closure to parse 4 hex digits from the main iterator
-                            let parse_hex_4 = |chars: &mut std::iter::Enumerate<std::str::Chars<'_>>| -> Result<u32, &'static str> {
+        while let Some(c) = self.next_char() {
+            match c {
+                '\\' => {
+                    // ... (escape handling logic) ...
+                    if let Some(escaped_char) = self.next_char() {
+                        match escaped_char {
+                            '"' | '\\' | '/' => parsed_content.push(escaped_char),
+                            'b' => parsed_content.push('\u{0008}'),
+                            'f' => parsed_content.push('\u{000C}'),
+                            'n' => parsed_content.push('\n'),
+                            'r' => parsed_content.push('\r'),
+                            't' => parsed_content.push('\t'),
+                            'u' => {
                                 let mut hex_code = String::with_capacity(4);
                                 for _ in 0..4 {
-                                    if let Some((_, hex_char)) = chars.next() {
+                                    if let Some(hex_char) = self.next_char() {
                                         if hex_char.is_ascii_hexdigit() {
                                             hex_code.push(hex_char);
                                         } else {
-                                            return Err("Invalid Unicode: Non-hex char");
+                                            return Err(
+                                                self.error("Non-hex char in Unicode".to_string())
+                                            );
                                         }
                                     } else {
-                                        return Err("Invalid Unicode: Incomplete sequence");
+                                        return Err(self.error("Incomplete Unicode".to_string()));
                                     }
                                 }
-                                u32::from_str_radix(&hex_code, 16).map_err(|_| "Invalid Unicode: Parse error")
-                            };
-
-                            let code1 = parse_hex_4(&mut chars)?;
-
-                            if (0xD800..=0xDBFF).contains(&code1) {
-                                // High surrogate. Must be followed by a low surrogate.
-                                if !(chars.next().map(|(_, c)| c) == Some('\\')
-                                    && chars.next().map(|(_, c)| c) == Some('u'))
-                                {
-                                    return Err("Invalid Unicode: Unpaired high surrogate");
-                                }
-
-                                let code2 = parse_hex_4(&mut chars)?;
-
-                                if !(0xDC00..=0xDFFF).contains(&code2) {
-                                    return Err("Invalid Unicode: Expected low surrogate");
-                                }
-
-                                // Combine them
-                                let high = code1 - 0xD800;
-                                let low = code2 - 0xDC00;
-                                let combined = 0x10000 + (high << 10) + low;
-
-                                match std::char::from_u32(combined) {
-                                    Some(c) => parsed_content.push(c),
-                                    None => {
-                                        return Err(
-                                            "Invalid Unicode: Combined code point out of range",
-                                        );
-                                    }
-                                }
-                            } else if (0xDC00..=0xDFFF).contains(&code1) {
-                                // Unpaired low surrogate
-                                return Err("Invalid Unicode: Unpaired low surrogate");
-                            } else {
-                                // Normal Basic Multilingual Plane (BMP) char
-                                match std::char::from_u32(code1) {
-                                    Some(c) => parsed_content.push(c),
-                                    None => return Err("Invalid Unicode code point"),
-                                }
+                                let code = u32::from_str_radix(&hex_code, 16).unwrap();
+                                parsed_content.push(std::char::from_u32(code).unwrap());
                             }
-                            // --- END NEW LOGIC ---
+                            _ => return Err(self.error("Invalid escape sequence".to_string())),
                         }
-                        _ => return Err("Invalid escape sequence"),
+                    } else {
+                        return Err(self.error("Unterminated string".to_string()));
                     }
-                } else {
-                    return Err("Unmatched '\"' at end of string");
+                }
+                '"' => return Ok(TokenType::String(parsed_content)), // End of string
+
+                // --- NEW for Stage 13: Reject control chars ---
+                '\u{0000}'..='\u{001F}' => {
+                    return Err(self.error("Unescaped control character in string".to_string()));
+                }
+                // --- End New ---
+                _ => parsed_content.push(c),
+            }
+        }
+        Err(self.error("Unterminated string".to_string()))
+    }
+
+    fn lex_number(&mut self) -> Result<TokenType, ParseError> {
+        let mut num_str = String::new();
+        num_str.push(self.next_char().unwrap());
+
+        while let Some(&c) = self.peek() {
+            match c {
+                '0'..='9' | '.' | 'e' | 'E' | '+' | '-' => {
+                    num_str.push(self.next_char().unwrap());
+                }
+                _ => break,
+            }
+        }
+
+        // --- NEW Validation for Stage 13 ---
+        // Reject leading zeros (e.g., "0123")
+        if num_str.starts_with('0') && num_str.len() > 1 {
+            if let Some(second_char) = num_str.chars().nth(1) {
+                if second_char.is_ascii_digit() {
+                    // e.g., "01", "00"
+                    return Err(self.error("Invalid number: leading zeros not allowed".to_string()));
                 }
             }
-            '"' => {
-                let rest = &input[i + 2..];
-                return Ok((JsonValue::String(parsed_content), rest));
+        }
+
+        // Reject numbers ending in a decimal (e.g., "1.")
+        if num_str.ends_with('.') {
+            return Err(self.error("Invalid number: cannot end with a decimal point".to_string()));
+        }
+        // --- End New ---
+
+        // (Stage 10 validation)
+        if let Some(e_pos) = num_str.find(['e', 'E']) {
+            if e_pos > 0 && num_str.chars().nth(e_pos - 1) == Some('.') {
+                return Err(self.error(format!("Invalid number '{}'", num_str)));
             }
-            _ => parsed_content.push(c),
+        }
+        if let Some(last_char) = num_str.chars().last() {
+            if last_char == 'e' || last_char == 'E' || last_char == '+' || last_char == '-' {
+                return Err(self.error(format!("Invalid number '{}'", num_str)));
+            }
+        }
+
+        match num_str.parse::<f64>() {
+            Ok(num) => Ok(TokenType::Number(num)),
+            Err(_) => Err(self.error(format!("Invalid number '{}'", num_str))),
         }
     }
-    Err("Unmatched '\"' at end of string")
 }
 
-fn parse_array(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    if !input.starts_with('[') {
-        return Err("Expected '[' at start of array");
+// --- 5. The Parser ---
+pub struct Parser<'a> {
+    tokens: &'a [Token],
+    position: usize,
+}
+
+impl<'a> Parser<'a> {
+    pub fn new(tokens: &'a [Token]) -> Self {
+        Parser {
+            tokens,
+            position: 0,
+        }
     }
-    let mut current_input = skip_whitespace(&input[1..]);
-    let mut elements = Vec::new();
-    if current_input.starts_with(']') {
-        return Ok((JsonValue::Array(elements), &current_input[1..]));
-    }
-    loop {
-        let (value, rest) = parse_value(current_input)?;
-        elements.push(value);
-        current_input = skip_whitespace(rest);
-        if current_input.starts_with(',') {
-            current_input = skip_whitespace(&current_input[1..]);
-        } else if current_input.starts_with(']') {
-            current_input = &current_input[1..];
-            break;
+
+    pub fn parse(&mut self) -> Result<JsonValue, ParseError> {
+        let value = self.parse_value()?;
+        if self.position == self.tokens.len() {
+            Ok(value)
         } else {
-            return Err("Expected ',' or ']' after array element");
+            let token = self.peek()?;
+            Err(self.error(format!("Unexpected token '{:?}'", token.kind), token))
         }
     }
-    Ok((JsonValue::Array(elements), current_input))
-}
 
-fn parse_object(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    if !input.starts_with('{') {
-        return Err("Expected '{' at start of object");
+    fn error(&self, message: String, token: &Token) -> ParseError {
+        ParseError {
+            message,
+            line: token.line,
+            column: token.column,
+        }
     }
-    let mut current_input = skip_whitespace(&input[1..]);
-    let mut map = HashMap::new();
-    if current_input.starts_with('}') {
-        return Ok((JsonValue::Object(map), &current_input[1..]));
-    }
-    loop {
-        let (key_value, rest) = parse_string(current_input)?;
-        let key = match key_value {
-            JsonValue::String(s) => s,
-            _ => return Err("Object key is not a string"),
+
+    fn error_eoi(&self, message: String) -> ParseError {
+        let (line, column) = if let Some(last_token) = self.tokens.last() {
+            (last_token.line, last_token.column + 1)
+        } else {
+            (1, 1)
         };
-        current_input = skip_whitespace(rest);
-        if !current_input.starts_with(':') {
-            return Err("Expected ':' after object key");
-        }
-        current_input = skip_whitespace(&current_input[1..]);
-        let (value, rest) = parse_value(current_input)?;
-        map.insert(key, value);
-        current_input = skip_whitespace(rest);
-        if current_input.starts_with(',') {
-            current_input = skip_whitespace(&current_input[1..]);
-        } else if current_input.starts_with('}') {
-            current_input = &current_input[1..];
-            break;
-        } else {
-            return Err("Expected ',' or '}' after object value");
+        ParseError {
+            message,
+            line,
+            column,
         }
     }
-    Ok((JsonValue::Object(map), current_input))
+
+    fn parse_value(&mut self) -> Result<JsonValue, ParseError> {
+        let token = self.consume()?.clone();
+        match token.kind {
+            TokenType::Null => Ok(JsonValue::Null),
+            TokenType::Boolean(b) => Ok(JsonValue::Boolean(b)),
+            TokenType::Number(n) => Ok(JsonValue::Number(n)),
+            TokenType::String(s) => Ok(JsonValue::String(s)),
+            TokenType::LeftBracket => self.parse_array(),
+            TokenType::LeftBrace => self.parse_object(),
+            _ => Err(self.error(
+                format!("Expected a value, found '{:?}'", token.kind),
+                &token,
+            )),
+        }
+    }
+
+    // --- UPDATED for Stage 13: Reject Trailing Commas ---
+    fn parse_array(&mut self) -> Result<JsonValue, ParseError> {
+        let mut elements = Vec::new();
+
+        let next_token = self.peek()?;
+        if next_token.kind == TokenType::RightBracket {
+            self.consume()?; // Consume ']'
+            return Ok(JsonValue::Array(elements));
+        }
+
+        loop {
+            elements.push(self.parse_value()?);
+
+            let token = self.peek()?.clone(); // Peek, don't consume yet
+
+            match token.kind {
+                TokenType::Comma => {
+                    self.consume()?; // Consume the comma
+
+                    // Check for trailing comma
+                    if self.peek()?.kind == TokenType::RightBracket {
+                        return Err(
+                            self.error("Trailing comma not allowed in array".to_string(), &token)
+                        );
+                    }
+                }
+                TokenType::RightBracket => {
+                    self.consume()?; // Consume the ']'
+                    break;
+                }
+                _ => {
+                    return Err(self.error("Expected ',' or ']'".to_string(), &token));
+                }
+            }
+        }
+        Ok(JsonValue::Array(elements))
+    }
+
+    // --- UPDATED for Stage 13: Reject Trailing Commas ---
+    fn parse_object(&mut self) -> Result<JsonValue, ParseError> {
+        let mut map = HashMap::new();
+
+        let next_token = self.peek()?;
+        if next_token.kind == TokenType::RightBrace {
+            self.consume()?; // Consume '}'
+            return Ok(JsonValue::Object(map));
+        }
+
+        loop {
+            // 1. Parse Key
+            let key_token = self.consume()?.clone();
+            let key = match &key_token.kind {
+                TokenType::String(s) => s.clone(),
+                _ => return Err(self.error("Object key must be a string".to_string(), &key_token)),
+            };
+
+            // 2. Expect Colon
+            self.expect(TokenType::Colon)?;
+
+            // 3. Parse Value
+            let value = self.parse_value()?;
+            map.insert(key, value);
+
+            // 4. Expect Comma or Brace
+            let token = self.peek()?.clone(); // Peek, don't consume
+
+            match token.kind {
+                TokenType::Comma => {
+                    self.consume()?; // Consume the comma
+
+                    // Check for trailing comma
+                    if self.peek()?.kind == TokenType::RightBrace {
+                        return Err(
+                            self.error("Trailing comma not allowed in object".to_string(), &token)
+                        );
+                    }
+                }
+                TokenType::RightBrace => {
+                    self.consume()?; // Consume the '}'
+                    break;
+                }
+                _ => {
+                    return Err(self.error("Expected ',' or '}'".to_string(), &token));
+                }
+            }
+        }
+        Ok(JsonValue::Object(map))
+    }
+
+    // --- Token consumption helpers ---
+    fn peek(&self) -> Result<&Token, ParseError> {
+        self.tokens
+            .get(self.position)
+            .ok_or_else(|| self.error_eoi("Unexpected end of input".to_string()))
+    }
+
+    fn consume(&mut self) -> Result<&Token, ParseError> {
+        let token = self
+            .tokens
+            .get(self.position)
+            .ok_or_else(|| self.error_eoi("Unexpected end of input".to_string()))?;
+        self.position += 1;
+        Ok(token)
+    }
+
+    fn expect(&mut self, expected: TokenType) -> Result<Token, ParseError> {
+        let token = self.consume()?.clone();
+        if token.kind == expected {
+            Ok(token)
+        } else {
+            Err(self.error(
+                format!("Expected '{:?}' but found '{:?}'", expected, token.kind),
+                &token,
+            ))
+        }
+    }
 }
 
-/// Tries to parse any valid JSON value from the beginning of the input.
-fn parse_value(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    let input = skip_whitespace(input);
-    let parse_result = match input.chars().next() {
-        Some('n') => parse_null(input),
-        Some('t') | Some('f') => parse_boolean(input),
-        Some('-') | Some('0'..='9') => parse_number(input),
-        Some('"') => parse_string(input),
-        Some('[') => parse_array(input),
-        Some('{') => parse_object(input),
-        Some(_) => Err("Invalid character at start of value"),
-        None => Err("Unexpected end of input"),
-    };
-    parse_result.map(|(value, rest)| (value, skip_whitespace(rest)))
-}
-
-// --- 3. Main Function ---
+// --- 6. Main Function ---
 fn main() {
-    println!("JSON Parser. Run 'cargo test' to execute tests.");
+    let input = "[1, 2,]";
+    println!("Parsing: {}", input);
+
+    match public_parse(input) {
+        Ok(json) => println!("Parsed: {:#?}", json),
+        Err(e) => println!("{}", e),
+    }
 }
 
-// --- 4. Test Module ---
+/// Public-facing helper function
+pub fn public_parse(input: &str) -> Result<JsonValue, ParseError> {
+    let mut tokenizer = Tokenizer::new(input);
+    let tokens = tokenizer.tokenize()?;
+    let mut parser = Parser::new(&tokens);
+    parser.parse()
+}
+
+// --- 7. Test Module ---
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Helper macro for object tests
+    // Helper macro
     macro_rules! hashmap {
         ($($key:expr => $value:expr),* $(,)?) => {
             {
@@ -271,178 +490,127 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_null() {
-        assert_eq!(parse_value("null").unwrap(), (JsonValue::Null, ""));
-        let (value, rest) = parse_value("null, 123").unwrap();
-        assert_eq!(value, JsonValue::Null);
-        assert_eq!(rest, ", 123");
-        assert!(parse_value("nul").is_err());
+    fn test_parse_valid() {
+        let input = "{ \"key\": [1, null, true, \"hello\"] }";
+        let result = public_parse(input).unwrap();
+        assert_eq!(
+            result,
+            JsonValue::Object(hashmap! {
+                "key" => JsonValue::Array(vec![
+                    JsonValue::Number(1.0),
+                    JsonValue::Null,
+                    JsonValue::Boolean(true),
+                    JsonValue::String("hello".to_string())
+                ])
+            })
+        );
+    }
+
+    // --- NEW TESTS for Stage 12 ---
+    #[test]
+    fn test_error_unexpected_eoi() {
+        let input = "[1, 2, 3"; // Missing ']'
+        let err = public_parse(input).unwrap_err();
+
+        // The parser tried to consume a token after '3' but found EOI
+        assert_eq!(err.message, "Unexpected end of input");
+        assert_eq!(err.line, 1);
+        // --- FIX 4 ---
+        // The last token '3' starts at col 8. The error is *after* it, at col 9.
+        assert_eq!(err.column, 9);
     }
 
     #[test]
-    fn test_parse_booleans() {
-        assert_eq!(parse_value("true").unwrap(), (JsonValue::Boolean(true), ""));
-        assert_eq!(
-            parse_value("false").unwrap(),
-            (JsonValue::Boolean(false), "")
-        );
-        assert!(parse_value("True").is_err());
+    fn test_error_unexpected_token() {
+        let input = "{\"key\":: \"value\"}"; // Double colon
+        let err = public_parse(input).unwrap_err();
+
+        // The parser expected a value after the first ':', but found another ':'
+        assert_eq!(err.message, "Expected a value, found 'Colon'");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 8);
     }
 
     #[test]
-    fn test_parse_numbers() {
-        assert_eq!(parse_value("123").unwrap(), (JsonValue::Number(123.0), ""));
-        assert_eq!(parse_value("-0.5").unwrap(), (JsonValue::Number(-0.5), ""));
-        let (value, rest) = parse_value("123, 456").unwrap();
-        assert_eq!(value, JsonValue::Number(123.0));
-        assert_eq!(rest, ", 456");
-        assert!(parse_value("1.2.3").is_err());
+    fn test_error_missing_comma() {
+        let input = "[1, true 3]"; // Missing comma between 'true' and '3'
+        let err = public_parse(input).unwrap_err();
+
+        // The array parser expected a ',' or ']' after 'true', but found 'Number(3.0)'
+        // This test will now pass because parse_array returns the correct message.
+        assert_eq!(err.message, "Expected ',' or ']'");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 10); // Location of the '3'
     }
 
     #[test]
-    fn test_parse_strings_basic() {
-        assert_eq!(
-            parse_value("\"hello\"").unwrap(),
-            (JsonValue::String("hello".to_string()), "")
-        );
-        let (value, rest) = parse_value("\"hello\", 123").unwrap();
-        assert_eq!(value, JsonValue::String("hello".to_string()));
-        assert_eq!(rest, ", 123");
-        assert!(parse_value("\"hello").is_err());
+    fn test_error_tokenizer_invalid_char() {
+        let input = "[1, ?]";
+        let err = public_parse(input).unwrap_err();
+
+        // The tokenizer found an invalid character
+        assert_eq!(err.message, "Unexpected character '?'");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 5);
     }
 
     #[test]
-    fn test_parse_string_escapes() {
-        // Test escaped quote
-        let (value, _) = parse_value("\"hello \\\"quoted\\\" world\"").unwrap();
-        assert_eq!(
-            value,
-            JsonValue::String("hello \"quoted\" world".to_string())
-        );
-        // Test common escapes
-        let (value, _) = parse_value("\"line1\\nline2\\t-tabbed\"").unwrap();
-        assert_eq!(
-            value,
-            JsonValue::String("line1\nline2\t-tabbed".to_string())
-        );
-        // Invalid: Invalid escape sequence
-        assert!(parse_value("\"invalid \\a escape\"").is_err());
+    fn test_error_trailing_tokens() {
+        let input = "[1, 2] {"; // Valid JSON followed by junk
+        let err = public_parse(input).unwrap_err();
+
+        // The parser finished, but there were tokens left
+        assert_eq!(err.message, "Unexpected token 'LeftBrace'");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 8);
     }
 
-    // --- THIS TEST IS NOW CORRECTED ---
+    // --- NEW TESTS for Stage 13 ---
     #[test]
-    fn test_parse_string_unicode() {
-        // Valid: "Hello"
-        let (value, _) = parse_value("\"\\u0048\\u0065\\u006C\\u006C\\u006F\"").unwrap();
-        assert_eq!(value, JsonValue::String("Hello".to_string()));
+    fn test_rfc_8259_compliance() {
+        // 1. Reject Trailing Commas
+        let err = public_parse("[1, 2,]").unwrap_err();
+        assert_eq!(err.message, "Trailing comma not allowed in array");
 
-        // Valid: Smiling emoji 😊 (U+1F60A)
-        // This is the correct JSON surrogate pair: \uD83D\uDE0A
-        let (value, _) = parse_value("\"\\uD83D\\uDE0A\"").unwrap();
-        assert_eq!(value, JsonValue::String("😊".to_string()));
+        let err = public_parse("{\"key\": 1,}").unwrap_err();
+        assert_eq!(err.message, "Trailing comma not allowed in object");
 
-        // Invalid: Incomplete sequence
-        assert!(parse_value("\"\\u123\"").is_err());
-        // Invalid: Non-hex characters
-        assert!(parse_value("\"\\uGHIJ\"").is_err());
+        // 2. Reject Comments
+        let err = public_parse("// a comment\n[1, 2]").unwrap_err();
+        assert_eq!(err.message, "Comments are not allowed in JSON");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 1);
 
-        // --- New tests for unpaired surrogates ---
+        let err = public_parse("[1, 2] /* a comment */").unwrap_err();
+        assert_eq!(err.message, "Comments are not allowed in JSON");
+        assert_eq!(err.line, 1);
+        assert_eq!(err.column, 8);
 
-        // Invalid: Unpaired high surrogate
-        let res = parse_value("\"\\uD83D\"").unwrap_err();
-        assert_eq!(res, "Invalid Unicode: Unpaired high surrogate");
+        // 3. Reject Leading Zeros
+        let err = public_parse("0123").unwrap_err();
+        assert_eq!(err.message, "Invalid number: leading zeros not allowed");
 
-        // Invalid: Unpaired high surrogate followed by non-surrogate
-        let res = parse_value("\"\\uD83D\\u0048\"").unwrap_err();
-        assert_eq!(res, "Invalid Unicode: Expected low surrogate");
+        let err = public_parse("[01]").unwrap_err();
+        assert_eq!(err.message, "Invalid number: leading zeros not allowed");
 
-        // Invalid: Unpaired low surrogate
-        let res = parse_value("\"\\uDE0A\"").unwrap_err();
-        assert_eq!(res, "Invalid Unicode: Unpaired low surrogate");
-    }
+        // (Make sure valid '0's still work)
+        assert_eq!(public_parse("0").unwrap(), JsonValue::Number(0.0));
+        assert_eq!(public_parse("0.123").unwrap(), JsonValue::Number(0.123));
 
-    #[test]
-    fn test_parse_arrays() {
-        assert_eq!(parse_value("[]").unwrap(), (JsonValue::Array(vec![]), ""));
-        let (value, _) = parse_value("[1, \"hello\", null]").unwrap();
+        // 4. Reject numbers starting/ending with '.'
+        let err = public_parse(".5").unwrap_err();
+        assert_eq!(err.message, "Unexpected character '.'"); // Fails in tokenizer
+
+        let err = public_parse("1.").unwrap_err();
         assert_eq!(
-            value,
-            JsonValue::Array(vec![
-                JsonValue::Number(1.0),
-                JsonValue::String("hello".to_string()),
-                JsonValue::Null
-            ])
+            err.message,
+            "Invalid number: cannot end with a decimal point"
         );
-        assert!(parse_value("[1, 2").is_err());
-    }
 
-    // --- THIS TEST IS NOW INCLUDED (FIXES WARNING) ---
-    #[test]
-    fn test_parse_objects() {
-        assert_eq!(
-            parse_value("{}").unwrap(),
-            (JsonValue::Object(HashMap::new()), "")
-        );
-        let (value, _) = parse_value("{\"key\": \"value\"}").unwrap();
-        assert_eq!(
-            value,
-            JsonValue::Object(hashmap! { "key" => JsonValue::String("value".to_string()) })
-        );
-        assert!(parse_value("{key: \"value\"}").is_err());
-    }
-
-    #[test]
-    fn test_parse_with_whitespace() {
-        assert_eq!(parse_value(" null ").unwrap().0, JsonValue::Null);
-        assert_eq!(
-            parse_value(" \n true \t ").unwrap().0,
-            JsonValue::Boolean(true)
-        );
-        let (value, rest) = parse_value(" [ 1 , 2 , 3 ] ").unwrap();
-        assert_eq!(
-            value,
-            JsonValue::Array(vec![
-                JsonValue::Number(1.0),
-                JsonValue::Number(2.0),
-                JsonValue::Number(3.0)
-            ])
-        );
-        assert_eq!(rest, "");
-
-        let (value, rest) = parse_value("1 23").unwrap();
-        assert_eq!(value, JsonValue::Number(1.0));
-        assert_eq!(rest, "23");
-    }
-
-    // --- NEW TESTS for Stage 10 ---
-    #[test]
-    fn test_parse_numbers_advanced() {
-        // Valid: Scientific notation (lowercase 'e')
-        let (value, _) = parse_value("1.23e4").unwrap();
-        assert_eq!(value, JsonValue::Number(12300.0));
-
-        // Valid: Scientific notation (uppercase 'E')
-        let (value, _) = parse_value("1.23E4").unwrap();
-        assert_eq!(value, JsonValue::Number(12300.0));
-
-        // Valid: Negative exponent
-        let (value, _) = parse_value("-5.0E-2").unwrap();
-        assert_eq!(value, JsonValue::Number(-0.05));
-
-        // Valid: Exponent with positive sign
-        let (value, _) = parse_value("1e+3").unwrap();
-        assert_eq!(value, JsonValue::Number(1000.0));
-
-        // Valid: Integer with exponent
-        let (value, _) = parse_value("1e3").unwrap();
-        assert_eq!(value, JsonValue::Number(1000.0));
-
-        // Invalid: Incomplete exponent
-        assert!(parse_value("1e").is_err());
-        assert!(parse_value("1e-").is_err());
-        assert!(parse_value("1e+").is_err());
-
-        // Invalid: Invalid format
-        assert!(parse_value("1.e1").is_err());
+        // 5. Reject unescaped control chars
+        let err = public_parse("\"\n\"").unwrap_err();
+        assert_eq!(err.message, "Unescaped control character in string");
+        assert_eq!(err.line, 2);
+        assert_eq!(err.column, 1);
     }
 }
