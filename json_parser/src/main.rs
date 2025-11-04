@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::iter::Peekable;
 use std::str::Chars;
@@ -241,6 +242,19 @@ impl<'a> Iterator for Tokenizer<'a> {
             return Some(token_result);
         }
     }
+}
+
+// --- 5. JSON Value Enum (for Stage 16) ---
+// This enum represents the "native data structures" (like maps and lists)
+// that Stage 16 asks us to serialize.
+#[derive(Debug, PartialEq, Clone)]
+pub enum JsonValue {
+    Null,
+    Boolean(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsonValue>),
+    Object(HashMap<String, JsonValue>),
 }
 
 // --- 6. "True" Streaming Parser ---
@@ -611,7 +625,91 @@ impl<'a> Iterator for StreamingParser<'a> {
     }
 }
 
-// --- 7. Main Function ---
+// --- 7. Stringify (Serialization) ---
+
+impl JsonValue {
+    /// Serializes the JsonValue into a compact JSON string,
+    /// as required by Stage 16[cite: 229].
+    pub fn stringify(&self) -> String {
+        let mut output = String::new();
+        // We use a helper that writes to a String.
+        // This unwrap is safe because writing to a String never fails.
+        Self::write_value(self, &mut output).unwrap();
+        output
+    }
+
+    /// Recursive helper function to write a value.
+    /// Uses fmt::Write for efficient string building.
+    fn write_value<W: fmt::Write>(value: &JsonValue, w: &mut W) -> fmt::Result {
+        match value {
+            JsonValue::Null => w.write_str("null"),
+            JsonValue::Boolean(b) => w.write_str(if *b { "true" } else { "false" }),
+            JsonValue::Number(n) => write!(w, "{}", n),
+            JsonValue::String(s) => Self::write_string(s, w),
+            JsonValue::Array(a) => Self::write_array(a, w),
+            JsonValue::Object(o) => Self::write_object(o, w),
+        }
+    }
+
+    /// Helper to write a JSON array.
+    fn write_array<W: fmt::Write>(arr: &Vec<JsonValue>, w: &mut W) -> fmt::Result {
+        w.write_char('[')?;
+        let mut first = true;
+        for val in arr {
+            if !first {
+                w.write_char(',')?;
+            }
+            Self::write_value(val, w)?;
+            first = false;
+        }
+        w.write_char(']')
+    }
+
+    /// Helper to write a JSON object.
+    fn write_object<W: fmt::Write>(obj: &HashMap<String, JsonValue>, w: &mut W) -> fmt::Result {
+        w.write_char('{')?;
+        let mut first = true;
+        // Note: HashMap iteration order is not guaranteed,
+        // but this is fine according to the JSON specification.
+        for (key, val) in obj {
+            if !first {
+                w.write_char(',')?;
+            }
+            Self::write_string(key, w)?; // Write the key (which must be a string)
+            w.write_char(':')?;
+            Self::write_value(val, w)?; // Write the value
+            first = false;
+        }
+        w.write_char('}')
+    }
+
+    /// Helper to write an escaped JSON string.
+    /// This handles escapes required by Stage 8 [cite: 136] and Stage 16 [cite: 234-235].
+    fn write_string<W: fmt::Write>(s: &str, w: &mut W) -> fmt::Result {
+        w.write_char('"')?;
+        for c in s.chars() {
+            match c {
+                // Standard escapes [cite: 136]
+                '"' => w.write_str("\\\""),
+                '\\' => w.write_str("\\\\"),
+                '/' => w.write_str("\\/"), // Optional, but good practice
+                '\u{0008}' => w.write_str("\\b"),
+                '\u{000C}' => w.write_str("\\f"),
+                '\n' => w.write_str("\\n"),
+                '\r' => w.write_str("\\r"),
+                '\t' => w.write_str("\\t"),
+                // Control characters must be escaped [cite: 210]
+                '\u{0000}'..='\u{001F}' => {
+                    write!(w, "\\u{:04x}", c as u32)
+                }
+                _ => w.write_char(c),
+            }?;
+        }
+        w.write_char('"')
+    }
+}
+
+// --- 8. Main Function ---
 fn main() {
     let input = "{ \"key\": [1, true, null] }";
     println!("--- Running Streaming Parser ---");
@@ -647,6 +745,8 @@ pub fn parse_streaming(input: &'_ str) -> Result<StreamingParser<'_>, ParseError
 // --- 9. Test Module ---
 #[cfg(test)]
 mod tests {
+    use super::HashMap;
+    use super::JsonValue;
     use super::*;
 
     fn collect_events(input: &str) -> Result<Vec<ParserEvent>, ParseError> {
@@ -785,5 +885,72 @@ mod tests {
         let small_input = "[1]";
         let err = parse_streaming(small_input);
         assert!(err.is_ok());
+    }
+
+    #[test]
+    fn test_stringify_stage_16_examples() {
+        // Test case from challenge:
+        // Input: A native map {"key": "value", "items": [1, None]}
+        // Output: The string {"key":"value","items":[1,null]} [cite: 232-233]
+        let mut items = HashMap::new();
+        items.insert("key".to_string(), JsonValue::String("value".to_string()));
+        items.insert(
+            "items".to_string(),
+            JsonValue::Array(vec![JsonValue::Number(1.0), JsonValue::Null]),
+        );
+        let obj = JsonValue::Object(items);
+
+        // We must check both key orders since HashMap order is not guaranteed
+        let output = obj.stringify();
+        let expected1 = r#"{"key":"value","items":[1,null]}"#;
+        let expected2 = r#"{"items":[1,null],"key":"value"}"#;
+
+        assert!(
+            output == expected1 || output == expected2,
+            "Stringify output was: {}",
+            output
+        );
+
+        // Test case from challenge:
+        // Input: A native string a "quoted" \ string
+        // Output: The string "a \"quoted\" \\ string" [cite: 234-235]
+        let s = JsonValue::String("a \"quoted\" \\ string".to_string());
+        assert_eq!(s.stringify(), r#""a \"quoted\" \\ string""#);
+    }
+
+    #[test]
+    fn test_stringify_all_types() {
+        // Primitives
+        assert_eq!(JsonValue::Null.stringify(), "null");
+        assert_eq!(JsonValue::Boolean(true).stringify(), "true");
+        assert_eq!(JsonValue::Boolean(false).stringify(), "false");
+        assert_eq!(JsonValue::Number(123.45).stringify(), "123.45");
+        assert_eq!(JsonValue::Number(-0.5).stringify(), "-0.5");
+        assert_eq!(JsonValue::Number(1e+3).stringify(), "1000");
+
+        // Empty Structures
+        assert_eq!(JsonValue::Array(vec![]).stringify(), "[]");
+        assert_eq!(JsonValue::Object(HashMap::new()).stringify(), "{}");
+
+        // Complex Array
+        let arr = JsonValue::Array(vec![
+            JsonValue::Number(1.0),
+            JsonValue::String("test".to_string()),
+            JsonValue::Boolean(true),
+            JsonValue::Null,
+            JsonValue::Object(HashMap::new()),
+        ]);
+        assert_eq!(arr.stringify(), r#"[1,"test",true,null,{}]"#);
+    }
+
+    #[test]
+    fn test_stringify_string_escapes() {
+        // Test all escapes from Stage 8 [cite: 136]
+        let s = JsonValue::String("\" \\ / \u{0008} \u{000C} \n \r \t".to_string());
+        assert_eq!(s.stringify(), r#""\" \\ \/ \b \f \n \r \t""#);
+
+        // Test control character escape [cite: 210]
+        let s_control = JsonValue::String("hello\u{0001}world".to_string());
+        assert_eq!(s_control.stringify(), r#""hello\u0001world""#);
     }
 }
