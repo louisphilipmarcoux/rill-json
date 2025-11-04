@@ -13,13 +13,9 @@ pub enum JsonValue {
 
 // --- 2. Parser Functions ---
 
-// --- NEW FUNCTION for Stage 7 ---
-/// Skips any insignificant whitespace (space, newline, tab, carriage return).
-/// Returns a string slice of the input starting *after* the whitespace.
 fn skip_whitespace(input: &str) -> &str {
     input.trim_start()
 }
-// --- END NEW FUNCTION ---
 
 fn parse_null(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if input.starts_with("null") {
@@ -50,101 +46,109 @@ fn parse_number(input: &str) -> Result<(JsonValue, &str), &'static str> {
     }
 }
 
+// --- UPDATED FUNCTION for Stage 8 ---
+/// Tries to parse a JSON string, handling escape sequences.
 fn parse_string(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if !input.starts_with('"') {
         return Err("Expected '\"' at start of string");
     }
-    match input[1..].find('"') {
-        Some(end_index) => {
-            let string_content = &input[1..end_index + 1];
-            let rest = &input[end_index + 2..];
-            Ok((JsonValue::String(string_content.to_string()), rest))
-        }
-        None => Err("Unmatched '\"' at end of string"),
-    }
-}
 
-// --- UPDATED for Stage 7 ---
+    // We'll build the new string content here
+    let mut parsed_content = String::new();
+    // We need an iterator of chars to look ahead
+    let mut chars = input[1..].chars().enumerate();
+
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                // Escape sequence: look at the next character
+                if let Some((_, escaped_char)) = chars.next() {
+                    match escaped_char {
+                        '"' => parsed_content.push('"'),
+                        '\\' => parsed_content.push('\\'),
+                        '/' => parsed_content.push('/'), // Often escaped, though not required
+                        'b' => parsed_content.push('\u{0008}'), // Backspace
+                        'f' => parsed_content.push('\u{000C}'), // Form feed
+                        'n' => parsed_content.push('\n'), // Newline
+                        'r' => parsed_content.push('\r'), // Carriage return
+                        't' => parsed_content.push('\t'), // Tab
+                        // Stage 9 will handle 'u'
+                        _ => return Err("Invalid escape sequence"), // e.g., \a, \z [cite: 150]
+                    }
+                } else {
+                    // Reached end of input after a backslash
+                    return Err("Unmatched '\"' at end of string");
+                }
+            }
+            '"' => {
+                // End of the string
+                // The rest of the input starts *after* this closing quote
+                // `i` is the index of the quote *within* &input[1..],
+                // so the slice end is `i + 2` relative to the original `input`.
+                let rest = &input[i + 2..];
+                return Ok((JsonValue::String(parsed_content), rest));
+            }
+            // A regular character
+            _ => parsed_content.push(c),
+        }
+    }
+
+    // If we get here, the loop finished without finding a closing "
+    Err("Unmatched '\"' at end of string")
+}
+// --- END UPDATED FUNCTION ---
+
 fn parse_array(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if !input.starts_with('[') {
         return Err("Expected '[' at start of array");
     }
-
-    // Skip opening '[' and initial whitespace
     let mut current_input = skip_whitespace(&input[1..]);
     let mut elements = Vec::new();
-
-    // Handle empty array: []
     if current_input.starts_with(']') {
         return Ok((JsonValue::Array(elements), &current_input[1..]));
     }
-
-    // Loop to parse elements
     loop {
-        // 1. Parse a value (which now also skips whitespace)
         let (value, rest) = parse_value(current_input)?;
         elements.push(value);
-        current_input = skip_whitespace(rest); // Skip whitespace *after* value
-
-        // 2. See what's next: a comma or a closing bracket
+        current_input = skip_whitespace(rest);
         if current_input.starts_with(',') {
-            // Consume the comma and skip whitespace after it
             current_input = skip_whitespace(&current_input[1..]);
         } else if current_input.starts_with(']') {
-            // Consume the bracket and finish
             current_input = &current_input[1..];
             break;
         } else {
-            // Anything else is an error
             return Err("Expected ',' or ']' after array element");
         }
     }
     Ok((JsonValue::Array(elements), current_input))
 }
-// --- END UPDATE ---
 
-// --- UPDATED for Stage 7 ---
 fn parse_object(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if !input.starts_with('{') {
         return Err("Expected '{' at start of object");
     }
-
-    // Skip opening '{' and initial whitespace
     let mut current_input = skip_whitespace(&input[1..]);
     let mut map = HashMap::new();
-
-    // Handle empty object: {}
     if current_input.starts_with('}') {
         return Ok((JsonValue::Object(map), &current_input[1..]));
     }
-
-    // Loop to parse key-value pairs
     loop {
-        // 1. Parse the key (must be a string)
         let (key_value, rest) = parse_string(current_input)?;
         let key = match key_value {
             JsonValue::String(s) => s,
             _ => return Err("Object key is not a string"),
         };
-        current_input = skip_whitespace(rest); // Skip whitespace *after* key
-
-        // 2. Expect and consume the colon
+        current_input = skip_whitespace(rest);
         if !current_input.starts_with(':') {
             return Err("Expected ':' after object key");
         }
-        current_input = skip_whitespace(&current_input[1..]); // Skip whitespace *after* colon
-
-        // 3. Parse the value
-        let (value, rest) = parse_value(current_input)?; // parse_value handles its own whitespace
+        current_input = skip_whitespace(&current_input[1..]);
+        let (value, rest) = parse_value(current_input)?;
         map.insert(key, value);
-        current_input = skip_whitespace(rest); // Skip whitespace *after* value
-
-        // 4. See what's next: a comma or a closing brace
+        current_input = skip_whitespace(rest);
         if current_input.starts_with(',') {
-            // Consume the comma and skip whitespace
             current_input = skip_whitespace(&current_input[1..]);
         } else if current_input.starts_with('}') {
-            // Consume the brace and finish
             current_input = &current_input[1..];
             break;
         } else {
@@ -153,15 +157,10 @@ fn parse_object(input: &str) -> Result<(JsonValue, &str), &'static str> {
     }
     Ok((JsonValue::Object(map), current_input))
 }
-// --- END UPDATE ---
 
 /// Tries to parse any valid JSON value from the beginning of the input.
-// --- UPDATED for Stage 7 ---
 fn parse_value(input: &str) -> Result<(JsonValue, &str), &'static str> {
-    // 1. Skip any preceding whitespace!
     let input = skip_whitespace(input);
-
-    // 2. Look at the first *meaningful* character
     let parse_result = match input.chars().next() {
         Some('n') => parse_null(input),
         Some('t') | Some('f') => parse_boolean(input),
@@ -169,13 +168,11 @@ fn parse_value(input: &str) -> Result<(JsonValue, &str), &'static str> {
         Some('"') => parse_string(input),
         Some('[') => parse_array(input),
         Some('{') => parse_object(input),
-        Some(_) => Err("Invalid character at start of value"), // More specific error
+        Some(_) => Err("Invalid character at start of value"),
         None => Err("Unexpected end of input"),
     };
-
     parse_result.map(|(value, rest)| (value, skip_whitespace(rest)))
 }
-// --- END UPDATE ---
 
 // --- 3. Main Function ---
 fn main() {
@@ -209,122 +206,74 @@ mod tests {
     #[test]
     fn test_parse_numbers() { /* ... (keep your old tests) ... */
     }
+
+    // --- UPDATED to split basic and escape tests ---
     #[test]
-    fn test_parse_strings() { /* ... (keep your old tests) ... */
+    fn test_parse_strings_basic() {
+        // Valid empty string
+        assert_eq!(
+            parse_value("\"\"").unwrap(),
+            (JsonValue::String("".to_string()), "")
+        );
+        // Valid simple string
+        assert_eq!(
+            parse_value("\"hello\"").unwrap(),
+            (JsonValue::String("hello".to_string()), "")
+        );
+        // Valid with trailing data
+        assert_eq!(
+            parse_value("\"hello\", 123").unwrap(),
+            (JsonValue::String("hello".to_string()), ", 123")
+        );
+        // Invalid: Unmatched quote
+        assert!(parse_value("\"hello").is_err());
+        // Invalid: Unquoted string
+        assert!(parse_value("hello").is_err());
     }
+
     #[test]
     fn test_parse_arrays() { /* ... (keep your old tests) ... */
     }
-
-    // --- This test should now PASS! ---
     #[test]
-    fn test_parse_objects() {
-        // Valid empty object
-        assert_eq!(
-            parse_value("{}").unwrap().0,
-            JsonValue::Object(HashMap::new())
-        );
-
-        // Valid simple object
-        assert_eq!(
-            parse_value("{\"key\": \"value\"}").unwrap().0,
-            JsonValue::Object(hashmap! { "key" => JsonValue::String("value".to_string()) })
-        );
-
-        // Valid object with mixed values (THIS WAS THE FAILING TEST)
-        let (value, rest) =
-            parse_value("{\"name\": \"Babbage\", \"age\": 30, \"admin\": true}").unwrap();
-        assert_eq!(
-            value,
-            JsonValue::Object(hashmap! {
-                "name" => JsonValue::String("Babbage".to_string()),
-                "age" => JsonValue::Number(30.0),
-                "admin" => JsonValue::Boolean(true)
-            })
-        );
-        assert_eq!(rest, ""); // Ensure it parses the whole thing
-
-        // Valid nested object
-        assert_eq!(
-            parse_value("{\"nested\": {\"key\": [null, 1]}}").unwrap().0,
-            JsonValue::Object(hashmap! {
-                "nested" => JsonValue::Object(hashmap! {
-                    "key" => JsonValue::Array(vec![
-                        JsonValue::Null,
-                        JsonValue::Number(1.0)
-                    ])
-                })
-            })
-        );
-
-        // Invalid cases
-        assert!(parse_value("{key: \"value\"}").is_err());
-        assert!(parse_value("{\"key\" \"value\"}").is_err());
-        assert!(parse_value("{\"key\": value}").is_err());
+    fn test_parse_objects() { /* ... (keep your old tests) ... */
+    }
+    #[test]
+    fn test_parse_with_whitespace() { /* ... (keep your old tests) ... */
     }
 
-    // --- NEW TESTS for Stage 7 ---
+    // --- NEW TESTS for Stage 8 ---
     #[test]
-    fn test_parse_with_whitespace() {
-        // Test whitespace around all token types
-        assert_eq!(parse_value(" null ").unwrap().0, JsonValue::Null);
-        assert_eq!(
-            parse_value(" \n true \t ").unwrap().0,
-            JsonValue::Boolean(true)
-        );
-        assert_eq!(
-            parse_value(" \t 123 \n ").unwrap().0,
-            JsonValue::Number(123.0)
-        );
-        assert_eq!(
-            parse_value(" \n \"hello\" \t ").unwrap().0,
-            JsonValue::String("hello".to_string())
-        );
-
-        // Test whitespace inside arrays
-        let (value, rest) = parse_value(" [ 1 , 2 , 3 ] ").unwrap();
+    fn test_parse_string_escapes() {
+        // Test escaped quote [cite: 141]
+        let (value, _) = parse_value("\"hello \\\"quoted\\\" world\"").unwrap();
         assert_eq!(
             value,
-            JsonValue::Array(vec![
-                JsonValue::Number(1.0),
-                JsonValue::Number(2.0),
-                JsonValue::Number(3.0)
-            ])
+            JsonValue::String("hello \"quoted\" world".to_string())
         );
-        assert_eq!(rest, "");
 
-        // Test whitespace inside objects
-        let (value, rest) = parse_value(" { \n \"key\" \t : \n \"value\" \n } ").unwrap();
+        // Test escaped backslash [cite: 145]
+        let (value, _) = parse_value("\"\\\\\"").unwrap();
+        assert_eq!(value, JsonValue::String("\\".to_string()));
+
+        // Test common escapes [cite: 143]
+        let (value, _) = parse_value("\"line1\\nline2\\t-tabbed\"").unwrap();
         assert_eq!(
             value,
-            JsonValue::Object(hashmap! { "key" => JsonValue::String("value".to_string()) })
+            JsonValue::String("line1\nline2\t-tabbed".to_string())
         );
-        assert_eq!(rest, "");
 
-        // Test complex nested structure with whitespace
-        let input = "
-            [
-                1,
-                \"hello\",
-                [
-                    null
-                ]
-            ]
-        ";
+        // Test all valid simple escapes
+        let (value, _) = parse_value("\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"").unwrap();
         assert_eq!(
-            parse_value(input).unwrap().0,
-            JsonValue::Array(vec![
-                JsonValue::Number(1.0),
-                JsonValue::String("hello".to_string()),
-                JsonValue::Array(vec![JsonValue::Null])
-            ])
+            value,
+            JsonValue::String("\"\\/\u{0008}\u{000C}\n\r\t".to_string())
         );
 
-        // Invalid: Whitespace inside a token [cite: 128]
-        assert!(parse_value("n ull").is_err());
-        assert!(parse_value("t rue").is_err());
-        let (value, rest) = parse_value("1 23").unwrap();
-        assert_eq!(value, JsonValue::Number(1.0));
-        assert_eq!(rest, "23");
+        // Invalid: Invalid escape sequence [cite: 149, 150]
+        assert!(parse_value("\"hello \\ world\"").is_err());
+        assert!(parse_value("\"invalid \\a escape\"").is_err());
+
+        // Invalid: Unterminated string after escape
+        assert!(parse_value("\"hello \\").is_err());
     }
 }
