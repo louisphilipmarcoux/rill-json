@@ -46,57 +46,102 @@ fn parse_number(input: &str) -> Result<(JsonValue, &str), &'static str> {
     }
 }
 
-// --- UPDATED FUNCTION for Stage 8 ---
-/// Tries to parse a JSON string, handling escape sequences.
+/// Tries to parse a JSON string, handling escape sequences and Unicode.
 fn parse_string(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if !input.starts_with('"') {
         return Err("Expected '\"' at start of string");
     }
 
-    // We'll build the new string content here
     let mut parsed_content = String::new();
-    // We need an iterator of chars to look ahead
     let mut chars = input[1..].chars().enumerate();
 
     while let Some((i, c)) = chars.next() {
         match c {
             '\\' => {
-                // Escape sequence: look at the next character
                 if let Some((_, escaped_char)) = chars.next() {
                     match escaped_char {
-                        '"' => parsed_content.push('"'),
-                        '\\' => parsed_content.push('\\'),
-                        '/' => parsed_content.push('/'), // Often escaped, though not required
-                        'b' => parsed_content.push('\u{0008}'), // Backspace
-                        'f' => parsed_content.push('\u{000C}'), // Form feed
-                        'n' => parsed_content.push('\n'), // Newline
-                        'r' => parsed_content.push('\r'), // Carriage return
-                        't' => parsed_content.push('\t'), // Tab
-                        // Stage 9 will handle 'u'
-                        _ => return Err("Invalid escape sequence"), // e.g., \a, \z [cite: 150]
+                        '"' | '\\' | '/' => parsed_content.push(escaped_char),
+                        'b' => parsed_content.push('\u{0008}'),
+                        'f' => parsed_content.push('\u{000C}'),
+                        'n' => parsed_content.push('\n'),
+                        'r' => parsed_content.push('\r'),
+                        't' => parsed_content.push('\t'),
+                        'u' => {
+                            // --- NEW Surrogate-Aware Logic ---
+
+                            // Helper closure to parse 4 hex digits from the main iterator
+                            let mut parse_hex_4 = |chars: &mut std::iter::Enumerate<std::str::Chars<'_>>| -> Result<u32, &'static str> {
+                                let mut hex_code = String::with_capacity(4);
+                                for _ in 0..4 {
+                                    if let Some((_, hex_char)) = chars.next() {
+                                        if hex_char.is_ascii_hexdigit() {
+                                            hex_code.push(hex_char);
+                                        } else {
+                                            return Err("Invalid Unicode: Non-hex char");
+                                        }
+                                    } else {
+                                        return Err("Invalid Unicode: Incomplete sequence");
+                                    }
+                                }
+                                u32::from_str_radix(&hex_code, 16).map_err(|_| "Invalid Unicode: Parse error")
+                            };
+
+                            let code1 = parse_hex_4(&mut chars)?;
+
+                            if (0xD800..=0xDBFF).contains(&code1) {
+                                // High surrogate. Must be followed by a low surrogate.
+                                if !(chars.next().map(|(_, c)| c) == Some('\\')
+                                    && chars.next().map(|(_, c)| c) == Some('u'))
+                                {
+                                    return Err("Invalid Unicode: Unpaired high surrogate");
+                                }
+
+                                let code2 = parse_hex_4(&mut chars)?;
+
+                                if !(0xDC00..=0xDFFF).contains(&code2) {
+                                    return Err("Invalid Unicode: Expected low surrogate");
+                                }
+
+                                // Combine them
+                                let high = code1 - 0xD800;
+                                let low = code2 - 0xDC00;
+                                let combined = 0x10000 + (high << 10) + low;
+
+                                match std::char::from_u32(combined) {
+                                    Some(c) => parsed_content.push(c),
+                                    None => {
+                                        return Err(
+                                            "Invalid Unicode: Combined code point out of range",
+                                        );
+                                    }
+                                }
+                            } else if (0xDC00..=0xDFFF).contains(&code1) {
+                                // Unpaired low surrogate
+                                return Err("Invalid Unicode: Unpaired low surrogate");
+                            } else {
+                                // Normal Basic Multilingual Plane (BMP) char
+                                match std::char::from_u32(code1) {
+                                    Some(c) => parsed_content.push(c),
+                                    None => return Err("Invalid Unicode code point"),
+                                }
+                            }
+                            // --- END NEW LOGIC ---
+                        }
+                        _ => return Err("Invalid escape sequence"),
                     }
                 } else {
-                    // Reached end of input after a backslash
                     return Err("Unmatched '\"' at end of string");
                 }
             }
             '"' => {
-                // End of the string
-                // The rest of the input starts *after* this closing quote
-                // `i` is the index of the quote *within* &input[1..],
-                // so the slice end is `i + 2` relative to the original `input`.
                 let rest = &input[i + 2..];
                 return Ok((JsonValue::String(parsed_content), rest));
             }
-            // A regular character
             _ => parsed_content.push(c),
         }
     }
-
-    // If we get here, the loop finished without finding a closing "
     Err("Unmatched '\"' at end of string")
 }
-// --- END UPDATED FUNCTION ---
 
 fn parse_array(input: &str) -> Result<(JsonValue, &str), &'static str> {
     if !input.starts_with('[') {
@@ -198,82 +243,146 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_null() { /* ... (keep your old tests) ... */
-    }
-    #[test]
-    fn test_parse_booleans() { /* ... (keep your old tests) ... */
-    }
-    #[test]
-    fn test_parse_numbers() { /* ... (keep your old tests) ... */
+    fn test_parse_null() {
+        assert_eq!(parse_value("null").unwrap(), (JsonValue::Null, ""));
+        let (value, rest) = parse_value("null, 123").unwrap();
+        assert_eq!(value, JsonValue::Null);
+        assert_eq!(rest, ", 123");
+        assert!(parse_value("nul").is_err());
     }
 
-    // --- UPDATED to split basic and escape tests ---
+    #[test]
+    fn test_parse_booleans() {
+        assert_eq!(parse_value("true").unwrap(), (JsonValue::Boolean(true), ""));
+        assert_eq!(
+            parse_value("false").unwrap(),
+            (JsonValue::Boolean(false), "")
+        );
+        assert!(parse_value("True").is_err());
+    }
+
+    #[test]
+    fn test_parse_numbers() {
+        assert_eq!(parse_value("123").unwrap(), (JsonValue::Number(123.0), ""));
+        assert_eq!(parse_value("-0.5").unwrap(), (JsonValue::Number(-0.5), ""));
+        let (value, rest) = parse_value("123, 456").unwrap();
+        assert_eq!(value, JsonValue::Number(123.0));
+        assert_eq!(rest, ", 456");
+        assert!(parse_value("1.2.3").is_err());
+    }
+
     #[test]
     fn test_parse_strings_basic() {
-        // Valid empty string
-        assert_eq!(
-            parse_value("\"\"").unwrap(),
-            (JsonValue::String("".to_string()), "")
-        );
-        // Valid simple string
         assert_eq!(
             parse_value("\"hello\"").unwrap(),
             (JsonValue::String("hello".to_string()), "")
         );
-        // Valid with trailing data
-        assert_eq!(
-            parse_value("\"hello\", 123").unwrap(),
-            (JsonValue::String("hello".to_string()), ", 123")
-        );
-        // Invalid: Unmatched quote
+        let (value, rest) = parse_value("\"hello\", 123").unwrap();
+        assert_eq!(value, JsonValue::String("hello".to_string()));
+        assert_eq!(rest, ", 123");
         assert!(parse_value("\"hello").is_err());
-        // Invalid: Unquoted string
-        assert!(parse_value("hello").is_err());
     }
 
-    #[test]
-    fn test_parse_arrays() { /* ... (keep your old tests) ... */
-    }
-    #[test]
-    fn test_parse_objects() { /* ... (keep your old tests) ... */
-    }
-    #[test]
-    fn test_parse_with_whitespace() { /* ... (keep your old tests) ... */
-    }
-
-    // --- NEW TESTS for Stage 8 ---
     #[test]
     fn test_parse_string_escapes() {
-        // Test escaped quote [cite: 141]
+        // Test escaped quote
         let (value, _) = parse_value("\"hello \\\"quoted\\\" world\"").unwrap();
         assert_eq!(
             value,
             JsonValue::String("hello \"quoted\" world".to_string())
         );
-
-        // Test escaped backslash [cite: 145]
-        let (value, _) = parse_value("\"\\\\\"").unwrap();
-        assert_eq!(value, JsonValue::String("\\".to_string()));
-
-        // Test common escapes [cite: 143]
+        // Test common escapes
         let (value, _) = parse_value("\"line1\\nline2\\t-tabbed\"").unwrap();
         assert_eq!(
             value,
             JsonValue::String("line1\nline2\t-tabbed".to_string())
         );
+        // Invalid: Invalid escape sequence
+        assert!(parse_value("\"invalid \\a escape\"").is_err());
+    }
 
-        // Test all valid simple escapes
-        let (value, _) = parse_value("\"\\\"\\\\\\/\\b\\f\\n\\r\\t\"").unwrap();
+    // --- THIS TEST IS NOW CORRECTED ---
+    #[test]
+    fn test_parse_string_unicode() {
+        // Valid: "Hello"
+        let (value, _) = parse_value("\"\\u0048\\u0065\\u006C\\u006C\\u006F\"").unwrap();
+        assert_eq!(value, JsonValue::String("Hello".to_string()));
+
+        // Valid: Smiling emoji 😊 (U+1F60A)
+        // This is the correct JSON surrogate pair: \uD83D\uDE0A
+        let (value, _) = parse_value("\"\\uD83D\\uDE0A\"").unwrap();
+        assert_eq!(value, JsonValue::String("😊".to_string()));
+
+        // Invalid: Incomplete sequence
+        assert!(parse_value("\"\\u123\"").is_err());
+        // Invalid: Non-hex characters
+        assert!(parse_value("\"\\uGHIJ\"").is_err());
+
+        // --- New tests for unpaired surrogates ---
+
+        // Invalid: Unpaired high surrogate
+        let res = parse_value("\"\\uD83D\"").unwrap_err();
+        assert_eq!(res, "Invalid Unicode: Unpaired high surrogate");
+
+        // Invalid: Unpaired high surrogate followed by non-surrogate
+        let res = parse_value("\"\\uD83D\\u0048\"").unwrap_err();
+        assert_eq!(res, "Invalid Unicode: Expected low surrogate");
+
+        // Invalid: Unpaired low surrogate
+        let res = parse_value("\"\\uDE0A\"").unwrap_err();
+        assert_eq!(res, "Invalid Unicode: Unpaired low surrogate");
+    }
+
+    #[test]
+    fn test_parse_arrays() {
+        assert_eq!(parse_value("[]").unwrap(), (JsonValue::Array(vec![]), ""));
+        let (value, _) = parse_value("[1, \"hello\", null]").unwrap();
         assert_eq!(
             value,
-            JsonValue::String("\"\\/\u{0008}\u{000C}\n\r\t".to_string())
+            JsonValue::Array(vec![
+                JsonValue::Number(1.0),
+                JsonValue::String("hello".to_string()),
+                JsonValue::Null
+            ])
         );
+        assert!(parse_value("[1, 2").is_err());
+    }
 
-        // Invalid: Invalid escape sequence [cite: 149, 150]
-        assert!(parse_value("\"hello \\ world\"").is_err());
-        assert!(parse_value("\"invalid \\a escape\"").is_err());
+    // --- THIS TEST IS NOW INCLUDED (FIXES WARNING) ---
+    #[test]
+    fn test_parse_objects() {
+        assert_eq!(
+            parse_value("{}").unwrap(),
+            (JsonValue::Object(HashMap::new()), "")
+        );
+        let (value, _) = parse_value("{\"key\": \"value\"}").unwrap();
+        assert_eq!(
+            value,
+            JsonValue::Object(hashmap! { "key" => JsonValue::String("value".to_string()) })
+        );
+        assert!(parse_value("{key: \"value\"}").is_err());
+    }
 
-        // Invalid: Unterminated string after escape
-        assert!(parse_value("\"hello \\").is_err());
+    #[test]
+    fn test_parse_with_whitespace() {
+        assert_eq!(parse_value(" null ").unwrap().0, JsonValue::Null);
+        assert_eq!(
+            parse_value(" \n true \t ").unwrap().0,
+            JsonValue::Boolean(true)
+        );
+        let (value, rest) = parse_value(" [ 1 , 2 , 3 ] ").unwrap();
+        assert_eq!(
+            value,
+            JsonValue::Array(vec![
+                JsonValue::Number(1.0),
+                JsonValue::Number(2.0),
+                JsonValue::Number(3.0)
+            ])
+        );
+        assert_eq!(rest, "");
+
+        let (value, rest) = parse_value("1 23").unwrap();
+        assert_eq!(value, JsonValue::Number(1.0));
+        assert_eq!(rest, "23");
     }
 }
