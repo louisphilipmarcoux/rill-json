@@ -257,7 +257,7 @@ pub enum JsonValue {
     Object(HashMap<String, JsonValue>),
 }
 
-// --- 6. "True" Streaming Parser ---
+// --- 6. "True" Streaming Parser (Stage 15) ---
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ParserEvent {
@@ -625,11 +625,11 @@ impl<'a> Iterator for StreamingParser<'a> {
     }
 }
 
-// --- 7. Stringify (Serialization) ---
+// --- 7. Stringify (Serialization - Stage 16) ---
 
 impl JsonValue {
     /// Serializes the JsonValue into a compact JSON string,
-    /// as required by Stage 16[cite: 229].
+    /// as required by Stage 16.
     pub fn stringify(&self) -> String {
         let mut output = String::new();
         // We use a helper that writes to a String.
@@ -684,12 +684,12 @@ impl JsonValue {
     }
 
     /// Helper to write an escaped JSON string.
-    /// This handles escapes required by Stage 8 [cite: 136] and Stage 16 [cite: 234-235].
+    /// This handles escapes required by Stage 8 and Stage 16.
     fn write_string<W: fmt::Write>(s: &str, w: &mut W) -> fmt::Result {
         w.write_char('"')?;
         for c in s.chars() {
             match c {
-                // Standard escapes [cite: 136]
+                // Standard escapes
                 '"' => w.write_str("\\\""),
                 '\\' => w.write_str("\\\\"),
                 '/' => w.write_str("\\/"), // Optional, but good practice
@@ -698,7 +698,7 @@ impl JsonValue {
                 '\n' => w.write_str("\\n"),
                 '\r' => w.write_str("\\r"),
                 '\t' => w.write_str("\\t"),
-                // Control characters must be escaped [cite: 210]
+                // Control characters must be escaped
                 '\u{0000}'..='\u{001F}' => {
                     write!(w, "\\u{:04x}", c as u32)
                 }
@@ -706,6 +706,102 @@ impl JsonValue {
             }?;
         }
         w.write_char('"')
+    }
+
+    // --- Pretty Print Bonus ---
+
+    /// The indentation string to use for pretty-printing.
+    const INDENT: &'static str = "  ";
+
+    /// Serializes the JsonValue into a human-readable,
+    /// indented JSON string.
+    pub fn stringify_pretty(&self) -> String {
+        let mut output = String::new();
+        // This unwrap is safe because writing to a String never fails.
+        Self::write_value_pretty(self, &mut output, 0).unwrap();
+        output
+    }
+
+    /// Recursive helper for pretty-printing a value.
+    fn write_value_pretty<W: fmt::Write>(
+        value: &JsonValue,
+        w: &mut W,
+        depth: usize,
+    ) -> fmt::Result {
+        match value {
+            // Primitives are written the same as compact
+            JsonValue::Null => w.write_str("null"),
+            JsonValue::Boolean(b) => w.write_str(if *b { "true" } else { "false" }),
+            JsonValue::Number(n) => write!(w, "{}", n),
+            JsonValue::String(s) => Self::write_string(s, w),
+            // Composites get new logic
+            JsonValue::Array(a) => Self::write_array_pretty(a, w, depth),
+            JsonValue::Object(o) => Self::write_object_pretty(o, w, depth),
+        }
+    }
+
+    /// Helper to pretty-print a JSON array.
+    fn write_array_pretty<W: fmt::Write>(
+        arr: &Vec<JsonValue>,
+        w: &mut W,
+        depth: usize,
+    ) -> fmt::Result {
+        // Empty array is just "[]"
+        if arr.is_empty() {
+            return w.write_str("[]");
+        }
+
+        let new_depth = depth + 1;
+        let indent = Self::INDENT.repeat(new_depth);
+        let closing_indent = Self::INDENT.repeat(depth);
+
+        w.write_str("[\n")?; // Opening bracket and newline
+
+        let mut first = true;
+        for val in arr {
+            if !first {
+                w.write_str(",\n")?; // Comma and newline before next item
+            }
+            w.write_str(&indent)?; // Indent
+            Self::write_value_pretty(val, w, new_depth)?; // Write the value
+            first = false;
+        }
+
+        write!(w, "\n{}", closing_indent)?; // Newline and closing indent
+        w.write_char(']') // Closing bracket
+    }
+
+    /// Helper to pretty-print a JSON object.
+    fn write_object_pretty<W: fmt::Write>(
+        obj: &HashMap<String, JsonValue>,
+        w: &mut W,
+        depth: usize,
+    ) -> fmt::Result {
+        // Empty object is just "{}"
+        if obj.is_empty() {
+            return w.write_str("{}");
+        }
+
+        let new_depth = depth + 1;
+        let indent = Self::INDENT.repeat(new_depth);
+        let closing_indent = Self::INDENT.repeat(depth);
+
+        w.write_str("{\n")?; // Opening brace and newline
+
+        let mut first = true;
+        for (key, val) in obj {
+            if !first {
+                w.write_str(",\n")?; // Comma and newline before next item
+            }
+            w.write_str(&indent)?; // Indent
+            Self::write_string(key, w)?; // Write the key
+            w.write_str(": ")?; // Colon and space
+            Self::write_value_pretty(val, w, new_depth)?; // Write the value
+            first = false;
+        }
+
+        write!(w, "\n{}", closing_indent)?; // Newline and closing indent
+        w.write_char('}') // Closing brace
     }
 }
 
@@ -728,9 +824,21 @@ fn main() {
         }
         Err(e) => println!("{}", e),
     }
+
+    println!("\n--- Running Stringify Demo ---");
+    let mut items = HashMap::new();
+    items.insert("key".to_string(), JsonValue::String("value".to_string()));
+    items.insert(
+        "items".to_string(),
+        JsonValue::Array(vec![JsonValue::Number(1.0), JsonValue::Null]),
+    );
+    let obj = JsonValue::Object(items);
+
+    println!("Compact: {}", obj.stringify());
+    println!("Pretty:\n{}", obj.stringify_pretty());
 }
 
-// --- 8. Public-facing helper function ---
+// --- 9. Public-facing helper function ---
 pub fn parse_streaming(input: &'_ str) -> Result<StreamingParser<'_>, ParseError> {
     if input.len() > MAX_JSON_SIZE_BYTES {
         return Err(ParseError {
@@ -742,12 +850,12 @@ pub fn parse_streaming(input: &'_ str) -> Result<StreamingParser<'_>, ParseError
     Ok(StreamingParser::new(input, DEFAULT_MAX_DEPTH))
 }
 
-// --- 9. Test Module ---
+// --- 10. Test Module ---
 #[cfg(test)]
 mod tests {
-    use super::HashMap;
-    use super::JsonValue;
+    use super::JsonValue; // Make sure to import JsonValue
     use super::*;
+    use std::collections::HashMap; // And HashMap
 
     fn collect_events(input: &str) -> Result<Vec<ParserEvent>, ParseError> {
         parse_streaming(input)?.collect()
@@ -887,11 +995,13 @@ mod tests {
         assert!(err.is_ok());
     }
 
+    // --- Stage 16 Tests ---
+
     #[test]
     fn test_stringify_stage_16_examples() {
         // Test case from challenge:
         // Input: A native map {"key": "value", "items": [1, None]}
-        // Output: The string {"key":"value","items":[1,null]} [cite: 232-233]
+        // Output: The string {"key":"value","items":[1,null]}
         let mut items = HashMap::new();
         items.insert("key".to_string(), JsonValue::String("value".to_string()));
         items.insert(
@@ -913,7 +1023,7 @@ mod tests {
 
         // Test case from challenge:
         // Input: A native string a "quoted" \ string
-        // Output: The string "a \"quoted\" \\ string" [cite: 234-235]
+        // Output: The string "a \"quoted\" \\ string"
         let s = JsonValue::String("a \"quoted\" \\ string".to_string());
         assert_eq!(s.stringify(), r#""a \"quoted\" \\ string""#);
     }
@@ -945,12 +1055,61 @@ mod tests {
 
     #[test]
     fn test_stringify_string_escapes() {
-        // Test all escapes from Stage 8 [cite: 136]
+        // Test all escapes from Stage 8
         let s = JsonValue::String("\" \\ / \u{0008} \u{000C} \n \r \t".to_string());
         assert_eq!(s.stringify(), r#""\" \\ \/ \b \f \n \r \t""#);
 
-        // Test control character escape [cite: 210]
+        // Test control character escape
         let s_control = JsonValue::String("hello\u{0001}world".to_string());
         assert_eq!(s_control.stringify(), r#""hello\u0001world""#);
+    }
+
+    #[test]
+    fn test_stringify_pretty_print() {
+        let mut sub_obj = HashMap::new();
+        sub_obj.insert("sub_key".to_string(), JsonValue::Number(2.0));
+
+        let mut items = HashMap::new();
+        items.insert("key".to_string(), JsonValue::String("value".to_string()));
+        items.insert(
+            "items".to_string(),
+            JsonValue::Array(vec![
+                JsonValue::Number(1.0),
+                JsonValue::Null,
+                JsonValue::Object(sub_obj),
+            ]),
+        );
+        items.insert("admin".to_string(), JsonValue::Boolean(true));
+        let obj = JsonValue::Object(items);
+
+        let pretty_string = obj.stringify_pretty();
+
+        // We can't test for an exact string match because HashMap
+        // iteration order is not guaranteed.
+
+        assert!(pretty_string.starts_with("{\n"));
+        assert!(pretty_string.ends_with("\n}"));
+
+        // --- FIXED LINES ---
+        // Check for the content of the lines, but NOT the trailing comma,
+        // because any of them could be the last item.
+        assert!(pretty_string.contains("\n  \"key\": \"value\""));
+        assert!(pretty_string.contains("\n  \"admin\": true"));
+        // --- END FIX ---
+
+        // This assertion is still correct because the value itself contains newlines
+        assert!(pretty_string.contains("\n  \"items\": [\n"));
+
+        // These assertions are also fine
+        assert!(pretty_string.contains("\n    1,"));
+        assert!(pretty_string.contains("\n    null,"));
+        assert!(pretty_string.contains("\n    {\n"));
+        assert!(pretty_string.contains("\n      \"sub_key\": 2\n"));
+        assert!(pretty_string.contains("\n    }\n"));
+        assert!(pretty_string.contains("\n  ]\n"));
+
+        // Test empty object and array
+        assert_eq!(JsonValue::Object(HashMap::new()).stringify_pretty(), "{}");
+        assert_eq!(JsonValue::Array(vec![]).stringify_pretty(), "[]");
     }
 }
