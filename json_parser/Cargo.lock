@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "rust-json-parser"
+name = "json_parser"
 version = "0.1.0"
