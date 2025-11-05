@@ -1,25 +1,120 @@
-// src/lib.rs
+//! # rill-json
+//!
+//! `rill-json` is a fast, 100% safe, and RFC 8259-compliant streaming JSON parser
+//! and serializer, built from scratch in pure Rust.
+//!
+//! This library is designed for performance, safety, and correctness.
+//!
+//! ## Key Features
+//!
+//! * **100% Safe Rust:** Contains no `unsafe` code.
+//! * **Streaming Parser:** An `Iterator` that emits `ParserEvent`s, ideal
+//!   for parsing large files with minimal memory.
+//! * **Optimized Performance:** Uses a byte-slice-based tokenizer with a
+//!   branchless Lookup Table (LUT) and `memchr` for high-performance,
+//!   safe-SIMD-accelerated string parsing.
+//! * **Serializer Included:** Comes with `stringify()` and `stringify_pretty()`
+//!   to serialize your Rust data back to JSON.
+//! * **RFC 8259 Compliant:** Passes a full test suite for specification compliance.
+//!
+//! ## Quick Start: Parsing (Streaming)
+//!
+//! The `parse_streaming` function is the primary entry point. It's the most
+//! efficient way to parse JSON, especially large files.
+//!
+//! ```no_run
+//! use rill_json::{parse_streaming, ParserEvent};
+//!
+//! fn main() {
+//!     let json_data = r#"{ "name": "Babbage", "id": 1815 }"#;
+//!     let mut parser = parse_streaming(json_data).unwrap();
+//!     let mut found_name_key = false;
+//!
+//!     while let Some(event) = parser.next() {
+//!         match event.unwrap() {
+//!             ParserEvent::Key(key) if key == "name" => found_name_key = true,
+//!             ParserEvent::String(value) if found_name_key => {
+//!                 println!("Found name: {}", value);
+//!                 break;
+//!             }
+//!             _ => found_name_key = false,
+//!         }
+//!     }
+//! }
+//! ```
+//!
+//! ## Quick Start: Serializing
+//!
+//! You can also create JSON strings from your own Rust data using the `JsonValue` enum.
+//!
+//! ```no_run
+//! use rill_json::JsonValue;
+//! use std::collections::HashMap;
+//!
+//! let mut user = HashMap::new();
+//! user.insert("username".to_string(), JsonValue::String("ada_l".to_string()));
+//! user.insert("id".to_string(), JsonValue::Number(1815.0));
+//!
+//! let json_object = JsonValue::Object(user);
+//!
+//! // Get the compact string
+//! let json_string = json_object.stringify();
+//! assert_eq!(json_string, r#"{"id":1815,"username":"ada_l"}"#);
+//! ```
 
 // 1. Declare all the new modules.
-// `tokenizer` is private to the library (not `pub`).
+/// Contains the primary `ParseError` type for the library.
 pub mod error;
+/// Contains the streaming `Parser` and its `ParserEvent` enum.
 pub mod parser;
+/// Contains the `Token` and `TokenType` enums used internally.
 pub mod token;
-mod tokenizer;
+/// Contains the `JsonValue` enum and the serialization (stringify) logic.
 pub mod value;
 
+/// The internal, high-performance, byte-based tokenizer (lexer).
+/// This module is private to the crate.
+mod tokenizer;
+
 // 2. Re-export the public-facing types.
-// This is what allows `main.rs` to keep working without changes.
+// This creates the clean, top-level API for users.
 pub use error::ParseError;
 pub use parser::{ParserEvent, StreamingParser};
 pub use value::JsonValue;
 
 // --- Constants ---
+/// The default maximum nesting depth (e.g., `[[[]]]`) to prevent stack overflows.
 const DEFAULT_MAX_DEPTH: usize = 100;
+/// The maximum allowed size of an input JSON (10MB) to prevent DoS attacks.
 const MAX_JSON_SIZE_BYTES: usize = 10 * 1024 * 1024;
 
 // --- Public-facing helper function ---
-// This is the main entry point for our library.
+
+/// Parses a JSON string slice into a `StreamingParser`.
+///
+/// This is the main entry point for the streaming parser. It's fast,
+/// low-allocation, and operates as an `Iterator` over `ParserEvent`s.
+///
+/// # Arguments
+/// * `input` - A string slice containing the JSON data to be parsed.
+///
+/// # Errors
+/// Returns a `ParseError` if the input exceeds the `MAX_JSON_SIZE_BYTES`
+/// limit (10MB) *before* parsing begins.
+///
+/// # Examples
+/// ```
+/// use rill_json::{parse_streaming, ParserEvent};
+///
+/// let json_data = r#"[1, "hello"]"#;
+/// let mut parser = parse_streaming(json_data).unwrap();
+///
+/// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::StartArray);
+/// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::Number(1.0));
+/// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::String("hello".to_string()));
+/// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::EndArray);
+/// assert!(parser.next().is_none());
+/// ```
 pub fn parse_streaming(input: &'_ str) -> Result<StreamingParser<'_>, ParseError> {
     if input.len() > MAX_JSON_SIZE_BYTES {
         return Err(ParseError {
@@ -132,12 +227,12 @@ mod tests {
     fn test_streaming_rfc_8259_compliance() {
         // Trailing Commas
         let err = collect_events("[1, 2,]").unwrap_err();
-        assert_eq!(err.message, "Unexpected ']'");
+        assert_eq!(err.message, "Unexpected ']', expected a value");
         assert_eq!(err.line, 1);
         assert_eq!(err.column, 7);
 
         let err = collect_events("{\"key\": 1,}").unwrap_err();
-        assert_eq!(err.message, "Expected '}' or a string key");
+        assert_eq!(err.message, "Unexpected '}', expected a string key");
         assert_eq!(err.line, 1);
         assert_eq!(err.column, 11);
 

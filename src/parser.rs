@@ -1,4 +1,9 @@
-// src/parser.rs
+//! Contains the `StreamingParser` and its state machine.
+//!
+//! This module defines the core logic of the parser, which is implemented
+//! as a state machine that consumes `Token`s from the `Tokenizer` and
+//! emits `ParserEvent`s.
+
 use crate::error::ParseError;
 use crate::token::{Token, TokenType};
 use crate::tokenizer::Tokenizer;
@@ -6,19 +11,38 @@ use std::iter::Peekable;
 
 // --- 6. "True" Streaming Parser (Stage 15) ---
 
+/// A single event emitted by the `StreamingParser`.
+///
+/// The parser is an `Iterator` that yields these events, allowing you
+/// to react to JSON data as it's being parsed without loading the
+/// entire structure into memory.
 #[derive(Debug, PartialEq, Clone)]
 pub enum ParserEvent {
-    StartObject, // {
-    EndObject,   // }
-    StartArray,  // [
-    EndArray,    // ]
-    Key(String), // "key" (in an object)
+    /// The start of a JSON object (`{`).
+    StartObject,
+    /// The end of a JSON object (`}`).
+    EndObject,
+    /// The start of a JSON array (`[`).
+    StartArray,
+    /// The end of a JSON array (`]`).
+    EndArray,
+    /// A JSON object key (e.g., `"name": ...`).
+    Key(String),
+    /// A JSON string value (e.g., `... : "value"`).
     String(String),
+    /// A JSON number value (e.g., `123`, `-0.5`, `1e10`).
     Number(f64),
+    /// A JSON boolean value (`true` or `false`).
     Boolean(bool),
+    /// A JSON `null` value.
     Null,
 }
 
+/// Internal state machine for the parser.
+///
+/// This enum tracks what the parser *expects* to see next,
+/// allowing it to enforce JSON grammar rules (e.g., "a comma or
+/// closing bracket must follow a value in an array").
 #[derive(Debug, PartialEq, Clone)]
 #[allow(clippy::enum_variant_names)]
 enum ParserState {
@@ -33,14 +57,25 @@ enum ParserState {
     ExpectObjectCommaOrEnd,     // After value in object - expect ',' or '}'
 }
 
+/// The main streaming JSON parser.
+///
+/// This struct is an `Iterator` that yields `Result<ParserEvent, ParseError>`.
+/// It is created by the `parse_streaming` function.
 pub struct StreamingParser<'a> {
+    /// The internal tokenizer (lexer) that breaks the input string into `Token`s.
     tokenizer: Peekable<Tokenizer<'a>>,
+    /// A stack of states, used for tracking nested objects and arrays.
     state_stack: Vec<ParserState>,
+    /// The maximum allowed nesting depth to prevent DoS attacks.
     max_depth: usize,
-    depth: usize, // Track current nesting depth
+    /// The *current* nesting depth of the parser.
+    depth: usize,
 }
 
 impl<'a> StreamingParser<'a> {
+    /// Creates a new `StreamingParser` for a given input string.
+    ///
+    /// This is called by the `parse_streaming` function in `lib.rs`.
     pub fn new(input: &'a str, max_depth: usize) -> Self {
         StreamingParser {
             tokenizer: Tokenizer::new(input).peekable(),
@@ -50,6 +85,7 @@ impl<'a> StreamingParser<'a> {
         }
     }
 
+    /// A helper function to create a `ParseError` from a token's location.
     fn error_from_token(&self, message: String, token: &Token) -> ParseError {
         ParseError {
             message,
@@ -59,34 +95,43 @@ impl<'a> StreamingParser<'a> {
     }
 }
 
+/// The main implementation of the parser's `Iterator` trait.
+/// This is where the state machine logic lives.
 impl<'a> Iterator for StreamingParser<'a> {
     type Item = Result<ParserEvent, ParseError>;
 
+    /// Consumes the next token and advances the parser's state.
     fn next(&mut self) -> Option<Self::Item> {
+        // Get the next token from the tokenizer.
         let token_result = self.tokenizer.next();
 
         let mut current_token = match token_result {
             Some(Ok(token)) => Some(token),
-            Some(Err(e)) => return Some(Err(e)),
-            None => None,
+            Some(Err(e)) => return Some(Err(e)), // Tokenizer error
+            None => None,                        // End of input
         };
 
+        // Loop handles "non-event" tokens (like `,` or `:`)
+        // that advance the state but don't emit a `ParserEvent`.
         loop {
             let state_tuple = (current_token.as_ref(), self.state_stack.last());
 
+            // Determine the current token and state.
             let (token, state) = match state_tuple {
                 (Some(token), Some(state)) => (token, state.clone()),
+                // End of input, but we're still in a nested state.
                 (None, Some(state)) => {
                     if *state == ParserState::ExpectValue && self.state_stack.len() == 1 {
-                        return None;
+                        return None; // We expected a value, but got clean EOF. Valid.
                     }
                     return Some(Err(ParseError {
                         message: "Unexpected end of input, unclosed structure".to_string(),
-                        line: 0,
+                        line: 0, // We don't have a token for location info
                         column: 0,
                     }));
                 }
-                (None, None) => return None,
+                (None, None) => return None, // Clean end
+                // We have a token, but the state stack is empty (parser finished).
                 (Some(token), None) => {
                     return Some(Err(
                         self.error_from_token("Unexpected trailing token".to_string(), token)
@@ -94,6 +139,7 @@ impl<'a> Iterator for StreamingParser<'a> {
                 }
             };
 
+            // This is the main state machine logic.
             let result = match (state, &token.kind) {
                 // --- Root level or nested value expected ---
                 (ParserState::ExpectValue, TokenType::LeftBracket) => {
@@ -237,8 +283,10 @@ impl<'a> Iterator for StreamingParser<'a> {
                     *self.state_stack.last_mut().unwrap() = ParserState::ExpectArrayCommaOrEnd;
                     Ok(Some(ParserEvent::Null))
                 }
+                // Check for invalid trailing comma `[1,,2]`
                 (ParserState::ExpectArrayValue, TokenType::RightBracket) => {
-                    Err(self.error_from_token("Unexpected ']'".to_string(), token))
+                    Err(self
+                        .error_from_token("Unexpected ']', expected a value".to_string(), token))
                 }
                 (ParserState::ExpectArrayValue, _) => {
                     Err(self.error_from_token("Expected a value".to_string(), token))
@@ -247,7 +295,7 @@ impl<'a> Iterator for StreamingParser<'a> {
                 // --- Inside Array: after a value, expecting ',' or ']' ---
                 (ParserState::ExpectArrayCommaOrEnd, TokenType::Comma) => {
                     *self.state_stack.last_mut().unwrap() = ParserState::ExpectArrayValue;
-                    Ok(None)
+                    Ok(None) // Comma is consumed, state changes, but no event emitted.
                 }
                 (ParserState::ExpectArrayCommaOrEnd, TokenType::RightBracket) => {
                     self.depth -= 1;
@@ -277,9 +325,9 @@ impl<'a> Iterator for StreamingParser<'a> {
                     *self.state_stack.last_mut().unwrap() = ParserState::ExpectObjectColon;
                     Ok(Some(ParserEvent::Key(s.clone())))
                 }
-                (ParserState::ExpectObjectKey, TokenType::RightBrace) => {
-                    Err(self.error_from_token("Expected '}' or a string key".to_string(), token))
-                }
+                // Check for invalid trailing comma `{"key":1,}`
+                (ParserState::ExpectObjectKey, TokenType::RightBrace) => Err(self
+                    .error_from_token("Unexpected '}', expected a string key".to_string(), token)),
                 (ParserState::ExpectObjectKey, _) => {
                     Err(self.error_from_token("Expected a string key".to_string(), token))
                 }
@@ -287,7 +335,7 @@ impl<'a> Iterator for StreamingParser<'a> {
                 // --- Inside Object: after key, expecting ':' ---
                 (ParserState::ExpectObjectColon, TokenType::Colon) => {
                     *self.state_stack.last_mut().unwrap() = ParserState::ExpectObjectValue;
-                    Ok(None)
+                    Ok(None) // Colon is consumed, state changes, no event emitted.
                 }
                 (ParserState::ExpectObjectColon, _) => {
                     Err(self.error_from_token("Expected ':'".to_string(), token))
@@ -343,7 +391,7 @@ impl<'a> Iterator for StreamingParser<'a> {
                 // --- Inside Object: after value, expecting ',' or '}' ---
                 (ParserState::ExpectObjectCommaOrEnd, TokenType::Comma) => {
                     *self.state_stack.last_mut().unwrap() = ParserState::ExpectObjectKey;
-                    Ok(None)
+                    Ok(None) // Comma consumed, state changes, no event.
                 }
                 (ParserState::ExpectObjectCommaOrEnd, TokenType::RightBrace) => {
                     self.depth -= 1;
@@ -355,11 +403,15 @@ impl<'a> Iterator for StreamingParser<'a> {
                 }
             };
 
+            // Handle the result of the `match` expression
             match result {
                 Ok(Some(event)) => {
+                    // We have an event to emit. Return it.
                     return Some(Ok(event));
                 }
                 Ok(None) => {
+                    // This was a non-event token (like `,` or `:`).
+                    // We loop again to get the *next* token.
                     current_token = match self.tokenizer.next() {
                         Some(Ok(token)) => Some(token),
                         Some(Err(e)) => return Some(Err(e)),
@@ -367,7 +419,10 @@ impl<'a> Iterator for StreamingParser<'a> {
                     };
                     continue;
                 }
-                Err(e) => return Some(Err(e)),
+                Err(e) => {
+                    // A parsing error occurred.
+                    return Some(Err(e));
+                }
             }
         }
     }
