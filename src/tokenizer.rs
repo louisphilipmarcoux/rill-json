@@ -148,7 +148,7 @@ impl<'a> Tokenizer<'a> {
         let content_slice = &self.bytes[self.cursor..self.cursor + quote_index];
 
         // Now, scan *that slice* for a backslash.
-        if let Some(_) = memchr(b'\\', content_slice) {
+        if memchr(b'\\', content_slice).is_some() {
             // "Cold" path: Contains escapes. We must build the string.
             s = String::with_capacity(content_slice.len());
 
@@ -203,7 +203,7 @@ impl<'a> Tokenizer<'a> {
             }
             // After the loop, we're at the closing quote.
             self.advance_byte(); // Consume the quote
-            return Ok(TokenType::String(s));
+            Ok(TokenType::String(s))
         } else {
             // "Hot" path: No escapes!
             for _ in 0..content_slice.len() {
@@ -219,7 +219,7 @@ impl<'a> Tokenizer<'a> {
 
             // We must *still* advance our column/line counters
             self.advance_byte(); // Advance past content + closing quote
-            return Ok(TokenType::String(s_str.to_string()));
+            Ok(TokenType::String(s_str.to_string()))
         }
     }
 

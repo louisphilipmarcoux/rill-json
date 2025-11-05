@@ -10,7 +10,7 @@ fn main() {
     // Call the library function
     match parse_streaming(input) {
         Ok(mut parser) => {
-            while let Some(event) = parser.next() {
+            for event in parser {
                 match event {
                     Ok(event) => println!("Event: {:?}", event),
                     Err(e) => {
