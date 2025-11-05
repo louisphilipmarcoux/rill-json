@@ -11,7 +11,7 @@ description = "A fast, 100% safe, and RFC 8259-compliant streaming JSON parser a
 readme = "README.md"
 
 # The link to your GitHub repository.
-repository = "https://github.com/louisphilipmarcoux/rill-json"
+repository = "https://github.com/louisphilipmarcoux/rust-json-parser"
 
 # The license is essential for a public crate.
 license = "MIT OR Apache-2.0"
