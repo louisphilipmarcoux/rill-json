@@ -85,7 +85,6 @@ For convenience, you can also parse directly into the 'JsonValue' enum.
         println!("Parsed value: {:?}", parsed);
     }
 
-
 ### **3\. Serializing Data (Stringify)**
 
 You can also use rill-json to create JSON strings from your own Rust data using the 'JsonValue' enum.

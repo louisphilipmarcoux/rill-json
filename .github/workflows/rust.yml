@@ -10,7 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  MSRV: "1.65.0"
+  MSRV: "1.81.0"
 
 jobs:
   ci:
@@ -45,12 +45,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.toolchain }}-
-
-      - name: Force regenerate lockfile for MSRV
-        if: matrix.toolchain == env.MSRV
-        # This tells the old version of Cargo to regenerate a v3 lockfile
-        # from Cargo.toml, fixing the "lock file version 4" error.
-        run: rm Cargo.lock && cargo update
 
       - name: Check formatting
         run: cargo fmt --all -- --check

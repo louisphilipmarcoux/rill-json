@@ -1,6 +1,6 @@
 [package]
 name = "rill-json"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["Louis-Philip Marcoux <louisphilipmarcoux@gmail.com>"]
 
@@ -16,7 +16,7 @@ keywords = ["json", "parser", "streaming", "serializer", "no_unsafe"]
 
 categories = ["parsing", "encoding"]
 
-rust-version = "1.65.0"
+rust-version = "1.81.0"
 
 [lib]
 name = "rill_json" # The name for `use rill_json`
