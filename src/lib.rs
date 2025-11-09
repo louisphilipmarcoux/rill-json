@@ -7,7 +7,7 @@
 //!
 //! ## Key Features
 //!
-//! * **100% Safe Rust:** Contains no `unsafe` code.
+//! * **100% Safe Rust:** Contains no `#![forbid(unsafe_code)]`.
 //! * **Streaming Parser:** An `Iterator` that emits `ParserEvent`s, ideal
 //!   for parsing large files with minimal memory.
 //! * **Optimized Performance:** Uses a byte-slice-based tokenizer with a

@@ -120,11 +120,12 @@ impl JsonValue {
                                 return Err(parser.next().unwrap().unwrap_err());
                             }
                             None => {
-                                // --- FIX: Specific error message ---
-                                return Err(ParseError {
-                                    message: "Unclosed array".to_string(),
-                                    line: 1, column: 1, // TODO: Get location
-                                });
+                                // This branch should be unreachable.
+                                // The StreamingParser's `next()` will return
+                                // `Some(Err("Unclosed array"))` when it hits EOF
+                                // in this state, which `peek()` will cache.
+                                // The `Some(Err(_))` branch will be taken instead.
+                                unreachable!("Unclosed array branch hit None");
                             }
                         }
                     }
@@ -134,7 +135,7 @@ impl JsonValue {
                     let mut obj = BTreeMap::new();
                     // Loop until we see `EndObject`
                     loop {
-                         match parser.peek() {
+                        match parser.peek() {
                             Some(Ok(ParserEvent::EndObject)) => {
                                 parser.next(); // Consume the EndObject
                                 break Ok(JsonValue::Object(obj));
@@ -150,22 +151,23 @@ impl JsonValue {
                                 obj.insert(key, val);
                             }
                             Some(Ok(_)) => {
-                                // E.g., saw a String instead of a Key
-                                return Err(ParseError {
-                                    message: "Expected key in object".to_string(),
-                                    line: 1, column: 1, // TODO
-                                });
+                                // This branch should be unreachable.
+                                // The StreamingParser would see a non-string token
+                                // (like a number) and return
+                                // `Err("Expected '}' or a string key")`.
+                                // This `Err` would be caught by `Some(Err(_))`.
+                                unreachable!("Invalid event in object");
                             }
                             Some(Err(_)) => {
                                 // Propagate the error
                                 return Err(parser.next().unwrap().unwrap_err());
                             }
                             None => {
-                                // --- FIX: Specific error message ---
-                                return Err(ParseError {
-                                    message: "Unclosed object".to_string(),
-                                    line: 1, column: 1, // TODO
-                                });
+                                // This branch should be unreachable.
+                                // The StreamingParser will return `Some(Err("Unclosed object"))`
+                                // which `peek()` will cache, causing the
+                                // `Some(Err(_))` branch to be taken.
+                                unreachable!("Unclosed object branch hit None");
                             }
                         }
                     }
@@ -173,11 +175,11 @@ impl JsonValue {
 
                 // Invalid start
                 ParserEvent::Key(_) | ParserEvent::EndArray | ParserEvent::EndObject => {
-                    Err(ParseError {
-                        message: "Expected a value".to_string(),
-                        line: 1,
-                        column: 1, // TODO
-                    })
+                    // This should be unreachable. The StreamingParser's
+                    // state machine should never emit these events when
+                    // `parse_one` is expecting a value. It would
+                    // return `Err("Expected a value")` instead.
+                    unreachable!("Invalid start event: {:?}", event)
                 }
             }
         } // End of `parse_one`
@@ -189,12 +191,10 @@ impl JsonValue {
         match parser.next() {
             None => Ok(root),
             Some(Err(e)) => Err(e),
-            // This error should be caught by the streaming parser first
-            Some(Ok(event)) => Err(ParseError {
-                message: format!("Unexpected trailing token: {:?}", event),
-                line: 1,
-                column: 1, // TODO
-            }),
+            // This branch is unreachable. The StreamingParser's `next()`
+            // will return `Some(Err("Unexpected trailing token"))` if it
+            // finds a token when its state stack is empty.
+            Some(Ok(event)) => unreachable!("Trailing token was not an error: {:?}", event),
         }
     }
 }

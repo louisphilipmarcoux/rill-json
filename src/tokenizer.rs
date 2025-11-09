@@ -330,8 +330,11 @@ impl<'a> Tokenizer<'a> {
             return Err(self.error("Expected a number".to_string()));
         }
 
-        // This is safe because we only advanced over ASCII bytes
-        let num_str = unsafe { str::from_utf8_unchecked(&self.bytes[start..end]) };
+        // This is 100% safe. The slice only contains ASCII number chars,
+        // so this will never fail, but we use the safe version to
+        // uphold the #![forbid(unsafe_code)] guarantee.
+        let num_str = str::from_utf8(&self.bytes[start..end])
+            .expect("Internal error: non-UTF8 in number slice");
 
         // --- RFC 8259 Validation ---
         if num_str.starts_with('0') && num_str.len() > 1 {
