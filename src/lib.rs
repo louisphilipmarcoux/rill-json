@@ -141,7 +141,7 @@ const MAX_JSON_SIZE_BYTES: usize = 10 * 1024 * 1024;
 /// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::EndArray);
 /// assert!(parser.next().is_none());
 /// ```
-pub fn parse_streaming<'a>(input: &'a str) -> Result<StreamingParser<'a>, ParseError> {
+pub fn parse_streaming(input: &str) -> Result<StreamingParser<'_>, ParseError> {
     if input.len() > MAX_JSON_SIZE_BYTES {
         return Err(ParseError {
             message: "Input exceeds maximum size limit".to_string(),
