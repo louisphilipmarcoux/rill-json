@@ -1,43 +1,34 @@
 [package]
 name = "rill-json"
-version = "0.1.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Louis-Philip Marcoux <louisphilipmarcoux@gmail.com>"]
 
-# This description is what users see on crates.io
 description = "A fast, 100% safe, and RFC 8259-compliant streaming JSON parser and serializer, built from scratch in Rust."
 
-# The link to this README file.
 readme = "README.md"
 
-# The link to your GitHub repository.
 repository = "https://github.com/louisphilipmarcoux/rill-json"
 
-# The license is essential for a public crate.
 license = "MIT OR Apache-2.0"
 
-# Keywords help people find your crate.
 keywords = ["json", "parser", "streaming", "serializer", "no_unsafe"]
 
-# Categories help people browse for your crate.
 categories = ["parsing", "encoding"]
 
+rust-version = "1.81.0"
 
-# Your library target
 [lib]
 name = "rill_json" # The name for `use rill_json`
 path = "src/lib.rs"
 
-# Your binary target (for demonstration)
 [[bin]]
 name = "rill_json_bin"
 path = "src/main.rs"
 
-
 [dependencies]
 # Your parser's only dependency!
-memchr = "2.7.4"
-
+memchr = "2.7"
 
 # Dependencies for testing, benchmarking, and fuzzing
 [dev-dependencies]
@@ -45,7 +36,6 @@ criterion = { version = "0.5", features = ["html_reports"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Configuration for benchmarks
 [[bench]]
 name = "parser_bench"
 harness = false

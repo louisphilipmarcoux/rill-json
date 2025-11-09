@@ -48,7 +48,9 @@ pub enum JsonValue {
     String(String),
     /// Represents a JSON array (list).
     Array(Vec<JsonValue>),
-    /// Represents a JSON object (map). (Using BTreeMap for Fix 4)
+    /// Represents a JSON object (map).
+    /// We use BTreeMap to guarantee deterministic (alphabetical) key order
+    /// during serialization.
     Object(BTreeMap<String, JsonValue>),
 }
 

@@ -7,7 +7,7 @@
 //!
 //! ## Key Features
 //!
-//! * **100% Safe Rust:** Contains no `#![forbid(unsafe_code)]`.
+//! * **100% Safe Rust:** Contains `#![forbid(unsafe_code)]` to guarantee no `unsafe` keyword.
 //! * **Streaming Parser:** An `Iterator` that emits `ParserEvent`s, ideal
 //!   for parsing large files with minimal memory.
 //! * **Optimized Performance:** Uses a byte-slice-based tokenizer with a
@@ -15,14 +15,18 @@
 //!   safe-SIMD-accelerated string parsing.
 //! * **Zero-Allocation String Parsing:** Returns borrowed string slices (`&str`)
 //!   when no JSON escapes are present, avoiding allocations.
+//! * **In-Memory DOM:** Provides a `JsonValue` enum for convenience, with a
+//!   `JsonValue::parse()` function to build an in-memory tree.
 //! * **Serializer Included:** Comes with `stringify()` and `stringify_pretty()`
 //!   to serialize your Rust data back to JSON.
 //! * **RFC 8259 Compliant:** Passes a full test suite for specification compliance.
 //!
-//! ## Quick Start: Parsing (Streaming)
+//! ## Quick Start: 3 Ways to Use `rill-json`
 //!
-//! The `parse_streaming` function is the primary entry point. It's the most
-//! efficient way to parse JSON, especially large files.
+//! ### 1. Streaming Parser (Lowest Memory)
+//!
+//! The `parse_streaming` function is the most efficient way to parse JSON,
+//! especially large files.
 //!
 //! ```no_run
 //! use rill_json::{parse_streaming, ParserEvent};
@@ -43,7 +47,7 @@
 //! }
 //! ```
 //!
-//! ## Quick Start: Parsing (In-Memory)
+//! ### 2. In-Memory Parsing (Most Convenient)
 //!
 //! For convenience, you can also parse directly to an in-memory `JsonValue`.
 //!
@@ -61,7 +65,7 @@
 //! assert_eq!(parsed, expected_val);
 //! ```
 //!
-//! ## Quick Start: Serializing
+//! ### 3. Serializing (Writing JSON)
 //!
 //! You can also create JSON strings from your own Rust data using the `JsonValue` enum.
 //!
@@ -78,6 +82,10 @@
 //! // Get the compact string
 //! let json_string = json_object.stringify().unwrap();
 //! assert_eq!(json_string, r#"{"id":1815,"username":"ada_l"}"#);
+//!
+//! // Or get the pretty-printed version
+//! let pretty_string = json_object.stringify_pretty().unwrap();
+//! println!("{}", pretty_string);
 //! ```
 
 // 1. Declare all the new modules.
@@ -133,7 +141,7 @@ const MAX_JSON_SIZE_BYTES: usize = 10 * 1024 * 1024;
 /// assert_eq!(parser.next().unwrap().unwrap(), ParserEvent::EndArray);
 /// assert!(parser.next().is_none());
 /// ```
-pub fn parse_streaming<'a>(input: &'a str) -> Result<StreamingParser<'a>, ParseError> {
+pub fn parse_streaming(input: &str) -> Result<StreamingParser<'_>, ParseError> {
     if input.len() > MAX_JSON_SIZE_BYTES {
         return Err(ParseError {
             message: "Input exceeds maximum size limit".to_string(),
@@ -153,14 +161,14 @@ mod tests {
     use serde_json::{self, Value as SerdeValue};
     use std::borrow::Cow;
 
-    fn collect_events<'a>(input: &'a str) -> Result<Vec<ParserEvent<'a>>, ParseError> {
+    fn collect_events(input: &str) -> Result<Vec<ParserEvent<'_>>, ParseError> {
         parse_streaming(input)?.collect()
     }
 
-    fn collect_events_with_depth<'a>(
-        input: &'a str,
+    fn collect_events_with_depth(
+        input: &str,
         depth: usize,
-    ) -> Result<Vec<ParserEvent<'a>>, ParseError> {
+    ) -> Result<Vec<ParserEvent<'_>>, ParseError> {
         // We can call this because `StreamingParser` and its `new` are public
         StreamingParser::new(input, depth).collect()
     }

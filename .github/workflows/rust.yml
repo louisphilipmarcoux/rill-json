@@ -1,26 +1,36 @@
 name: Rust CI
 
-# Run on pushes and pull requests to the main branch
+# Run on pushes and pull requests to main branch, and on release tags
 on:
   push:
     branches: ["main"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
+  MSRV: "1.81.0"
 
 jobs:
-  check-and-test:
-    name: Check, Format, Lint, and Test
-    runs-on: ubuntu-latest
+  ci:
+    name: Test, Lint, and Format
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel all jobs if one fails
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        toolchain: [stable, nightly, "1.81.0"]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain (${{ matrix.toolchain }})
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.toolchain }}
           components: clippy, rustfmt
 
       - name: Restore Cargo cache
@@ -32,14 +42,25 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.toolchain }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.toolchain }}-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy (linter)
         # Fail the build if there are any warnings
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --all-features
+
+      # Only run bench and dry-run on one specific job to avoid duplication
+      - name: Run benchmarks
+        if: matrix.os == 'ubuntu-latest' && matrix.toolchain == 'stable'
+        run: cargo bench
+
+      - name: Check if package is publishable
+        if: matrix.os == 'ubuntu-latest' && matrix.toolchain == 'stable'
+        run: cargo publish --dry-run
