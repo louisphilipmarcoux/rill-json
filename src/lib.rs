@@ -161,14 +161,14 @@ mod tests {
     use serde_json::{self, Value as SerdeValue};
     use std::borrow::Cow;
 
-    fn collect_events<'a>(input: &'a str) -> Result<Vec<ParserEvent<'a>>, ParseError> {
+    fn collect_events(input: &str) -> Result<Vec<ParserEvent<'_>>, ParseError> {
         parse_streaming(input)?.collect()
     }
 
-    fn collect_events_with_depth<'a>(
-        input: &'a str,
+    fn collect_events_with_depth(
+        input: &str,
         depth: usize,
-    ) -> Result<Vec<ParserEvent<'a>>, ParseError> {
+    ) -> Result<Vec<ParserEvent<'_>>, ParseError> {
         // We can call this because `StreamingParser` and its `new` are public
         StreamingParser::new(input, depth).collect()
     }
