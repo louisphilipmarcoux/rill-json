@@ -12,24 +12,24 @@ rill-json is designed for performance, correctness and safety. It provides a low
 
 ## **Key Features**
 
-* **100% Safe Rust:** Contains '#![forbid(unsafe_code)]' to guarantee no unsafe keyword is used.  
-* **Streaming Parser:** An 'Iterator' that emits 'ParserEvent's, ideal for parsing large files with minimal memory.  
-* **Optimized Performance:** Uses a byte-slice-based tokenizer with a branchless Lookup Table (LUT) and 'memchr' (for "safe SIMD") to achieve high performance.
-* **Zero-Allocation String Parsing:** Returns borrowed string slices ('&str') when no JSON escapes are present, avoiding allocations.
-* **In-Memory DOM:** Provides a 'JsonValue' enum for convenience, with a 'JsonValue::parse()' function to build an in-memory tree.
-* **Serializer Included:** Comes with 'stringify()' and 'stringify\_pretty()' to serialize your Rust data. 'JsonValue' uses 'BTreeMap' for objects to guarantee deterministic key order.
+* **100% Safe Rust:** Contains `#![forbid(unsafe_code)]` to guarantee no unsafe keyword is used.  
+* **Streaming Parser:** An `Iterator` that emits `ParserEvent`s, ideal for parsing large files with minimal memory.  
+* **Optimized Performance:** Uses a byte-slice-based tokenizer with a branchless Lookup Table (LUT) and `memchr` (for "safe SIMD") to achieve high performance.
+* **Zero-Allocation String Parsing:** Returns borrowed string slices (`&str`) when no JSON escapes are present, avoiding allocations.
+* **In-Memory DOM:** Provides a `JsonValue` enum for convenience, with a `JsonValue::parse()` function to build an in-memory tree.
+* **Serializer Included:** Comes with `stringify()` and `stringify\_pretty()` to serialize your Rust data. `JsonValue` uses `BTreeMap` for objects to guarantee deterministic key order.
 * **RFC 8259 Compliant:** Built to pass the official JSON specification tests.
 
 ## **Quick Start**
 
-Add rill-json to your 'Cargo.toml':
+Add rill-json to your `Cargo.toml`:
 
     [dependencies]  
     rill-json = "0.1.0" # Check crates.io for the latest version
 
 ### **1\. Parsing JSON (Streaming)**
 
-The 'parse\_streaming' function is the primary entry point. It returns an iterator that you can loop over. This is the most memory-efficient way to parse JSON.
+The `parse\_streaming` function is the primary entry point. It returns an iterator that you can loop over. This is the most memory-efficient way to parse JSON.
 
     use rill_json::{parse_streaming, ParserEvent};
 
@@ -67,7 +67,7 @@ The 'parse\_streaming' function is the primary entry point. It returns an iterat
 
 ### **2. Parsing JSON (In-Memory)**
 
-For convenience, you can also parse directly into the 'JsonValue' enum.
+For convenience, you can also parse directly into the `JsonValue` enum.
 
     use rill_json::{JsonValue, JsonNumber};
     use std::collections::BTreeMap;
@@ -87,7 +87,7 @@ For convenience, you can also parse directly into the 'JsonValue' enum.
 
 ### **3\. Serializing Data (Stringify)**
 
-You can also use rill-json to create JSON strings from your own Rust data using the 'JsonValue' enum.
+You can also use rill-json to create JSON strings from your own Rust data using the `JsonValue` enum.
 
     use rill_json::{JsonValue, JsonNumber};
     use std::collections::BTreeMap; // Use BTreeMap to match the lib's implementation
